@@ -25,3 +25,11 @@ rtt-target = { version = "0.3", features = ["cortex-m"] }
 panic-rtt-target = { version = "0.1", features = ["cortex-m"] }
 usbd_scsi = "0.1"
 usbd_mass_storage = "0.1"
+
+[profile.dev]
+debug=true
+opt-level=0
+
+[profile.dev.package."*"]
+opt-level=0
+debug = true # symbols are nice and they don't increase the size on Flash

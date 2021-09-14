@@ -18,6 +18,7 @@ use rtt_target::{rprintln, rtt_init_print};
 use stm32f4xx_hal::gpio::{gpioa, Edge, ExtiPin, Input, PullUp};
 use stm32f4xx_hal::timer::{Event, Timer};
 
+const DISP_I2C_ADDR: u8 = 0x77;
 #[app(device = feather_f405::hal::stm32, monotonic = rtic::cyccnt::CYCCNT, peripherals = true)]
 const APP: () = {
     struct Resources {
@@ -28,6 +29,7 @@ const APP: () = {
     }
     #[init(spawn=[say_hello])]
     fn init(cx: init::Context) -> init::LateResources {
+        rtt_init_print!();
         let mut core = cx.core;
         core.DCB.enable_trace();
         core.DWT.enable_cycle_counter();
@@ -38,21 +40,18 @@ const APP: () = {
         let mut syscfg = device.SYSCFG.constrain();
         let mut exti = device.EXTI;
 
-        rtt_init_print!();
         let gpiob = device.GPIOB.split();
-        let scl = gpiob.pb8.into_alternate_af4().set_open_drain();
+        let scl = gpiob.pb6.into_alternate_af4().set_open_drain();
         let sda = gpiob.pb7.into_alternate_af4().set_open_drain();
-        let i2c = I2c::new(device.I2C1, (scl, sda), 400.khz(), clocks);
-        const DISP_I2C_ADDR: u8 = 112;
-        // let mut ht16k33 = HT16K33::new(i2c, DISP_I2C_ADDR);
-        // ht16k33.initialize().expect("Failed to initialize ht16k33");
-        // ht16k33
-        //     .set_display(Display::ON)
-        //     .expect("Could not turn on the display!");
-        // ht16k33
-        //     .set_dimming(Dimming::BRIGHTNESS_MIN)
-        //     .expect("Could not set dimming!");
-
+        let i2c = I2c::new(device.I2C1, (scl, sda), 40.khz(), clocks);
+        let mut ht16k33 = HT16K33::new(i2c, DISP_I2C_ADDR);
+        ht16k33.initialize().expect("Failed to initialize ht16k33");
+        ht16k33
+            .set_display(Display::ON)
+            .expect("Could not turn on the display!");
+        ht16k33
+            .set_dimming(Dimming::BRIGHTNESS_MAX)
+            .expect("Could not set dimming!");
         // // Sending individual digits
         // ht16k33.update_buffer_with_digit(Index::One, 1);
         // ht16k33.update_buffer_with_digit(Index::Two, 2);
