@@ -16,12 +16,21 @@ use stm32f4xx_hal::gpio::{gpioa, Edge, ExtiPin, Input, PullUp};
 use stm32f4xx_hal::prelude::*;
 use stm32f4xx_hal::timer::{Event, Timer};
 
+pub struct Timing {}
+
+impl Timing {
+    pub fn hello(&self) {
+        rprintln!("Hello");
+    }
+}
+
 #[app(device = feather_f405::hal::stm32, monotonic = rtic::cyccnt::CYCCNT, peripherals = true)]
 const APP: () = {
     struct Resources {
         message: String<100>,
         input_pin: gpioa::PA<Input<PullUp>>,
         timer: Timer<pac::TIM2>,
+        timing: Timing,
     }
     #[init(spawn=[say_hello])]
     fn init(cx: init::Context) -> init::LateResources {
@@ -64,12 +73,14 @@ const APP: () = {
 
         let mut timer = Timer::tim2(device.TIM2, 10.mhz(), clocks);
         timer.listen(Event::TimeOut);
+        let timing = Timing {};
         rprintln!("Init successful");
         cx.spawn.say_hello().expect("To start say hello task");
         init::LateResources {
             message: "Hello world".into(),
             input_pin: pa6,
             timer,
+            timing,
         }
     }
 
@@ -84,15 +95,19 @@ const APP: () = {
     fn say_hello(cx: say_hello::Context) {
         rprintln!("{}", cx.resources.message);
     }
-    #[task(binds = EXTI9_5, priority=8, resources=[input_pin])]
+
+    #[task(binds = EXTI9_5, priority=8, resources=[input_pin, timing])]
     fn exti9_5(cx: exti9_5::Context) {
         cx.resources.input_pin.clear_interrupt_pending_bit();
+        cx.resources.timing.hello();
         //rprintln!("SIGNAL");
     }
-    #[task(binds = TIM2, priority=8, resources=[timer])]
+
+    #[task(binds = TIM2, priority=8, resources=[timer, timing])]
     fn tim2(cx: tim2::Context) {
         cx.resources.timer.clear_interrupt(Event::TimeOut);
-        rprintln!("TIMER2");
+        cx.resources.timing.hello();
+        //rprintln!("TIMER2");
     }
 
     extern "C" {
