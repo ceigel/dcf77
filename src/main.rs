@@ -2,8 +2,10 @@
 #![no_main]
 extern crate heapless;
 
+use crate::stm32f4xx_hal::i2c::I2c;
 use panic_rtt_target as _;
 
+use adafruit_7segment::{Index, SevenSegment};
 use feather_f405::hal as stm32f4xx_hal;
 use heapless::String;
 use ht16k33::{Dimming, Display, HT16K33};
@@ -24,7 +26,7 @@ const APP: () = {
         core.SCB.set_sleepdeep();
 
         let device = cx.device;
-        let mut rcc = device.RCC.constrain();
+        let rcc = device.RCC.constrain();
         let clocks = rcc.cfgr.sysclk(48.mhz()).freeze();
 
         rtt_init_print!();
