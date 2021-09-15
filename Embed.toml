@@ -21,4 +21,5 @@ timeout = 3000
 show_timestamps = true
 
 [default.gdb]
-enabled = false
+enabled = true
+gdb_connection_string = "127.0.0.1:3333"
