@@ -164,9 +164,9 @@ impl MyDecoder {
 
     pub fn read_bit(&mut self, level: bool) {
         if level != self.current_level {
-            if self.current_count - self.last_transition >= Wrapping(90) {
-                if self.current_level == false {
-                    rprintln!("Transition up {}", self.current_count);
+            if level == true {
+                if self.current_count - self.last_transition >= Wrapping(9) {
+                    rprintln!("Transition up {:?}", self.current_count / Wrapping(100));
                     let datapos = self.data_pos;
                     self.data_pos = if self.data_pos < 60 {
                         self.data_pos + 1
@@ -174,16 +174,22 @@ impl MyDecoder {
                         0
                     };
 
-                    if self.current_count - self.last_transition > Wrapping(180) {
+                    if self.current_count - self.last_transition > Wrapping(18) {
                         self.bits = self.bits | (1 << datapos); // bit == 1
-                    } else if self.current_count - self.last_transition >= Wrapping(90) {
+                    } else if self.current_count - self.last_transition >= Wrapping(9) {
                         self.bits = self.bits & !(1 << datapos); // bit == 0
                     } else {
                         rprintln!("Transition too short");
                     }
                     self.seconds += 1;
                     self.seconds_changed = true;
-                } else {
+
+                    self.current_level = level;
+                    self.last_transition = self.current_count;
+                }
+            } else {
+                if self.current_count - self.last_transition >= Wrapping(90) {
+                    rprintln!("Transition down {:?}", self.current_count / Wrapping(100));
                     if self.current_count - self.last_transition > Wrapping(180) {
                         // minute end
                         rprintln!("minute ended");
@@ -191,9 +197,9 @@ impl MyDecoder {
                         self.seconds = 0;
                         self.last_bits.replace(self.bits);
                     }
+                    self.current_level = level;
+                    self.last_transition = self.current_count;
                 }
-                self.current_level = level;
-                self.last_transition = self.current_count;
             }
         }
         self.current_count += Wrapping(1);
