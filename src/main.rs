@@ -30,40 +30,20 @@ type SegmentDisplay =
     HT16K33<I2c<pac::I2C1, (gpiob::PB6<AlternateOD<AF4>>, gpiob::PB7<AlternateOD<AF4>>)>>;
 
 pub struct MyDecoder {
-    bits: u64,
-    seconds: u8,
-    seconds_changed: bool,
-    data_pos: u16,
     current_count: Wrapping<u64>,
     current_level: bool,
     last_transition: Wrapping<u64>,
-    last_bits: Option<u64>,
+    last_pause: u64,
 }
 
 impl MyDecoder {
     pub fn new() -> Self {
         Self {
-            bits: 0,
-            seconds: 0,
-            seconds_changed: false,
-            data_pos: 0,
             current_count: Wrapping(0),
             current_level: false,
             last_transition: Wrapping(0),
-            last_bits: None,
+            last_pause: 0,
         }
-    }
-    pub fn read_seconds(&mut self) -> u8 {
-        self.seconds_changed = false;
-        self.seconds
-    }
-
-    pub fn seconds_changed(&self) -> bool {
-        self.seconds_changed
-    }
-
-    pub fn last_bits(&self) -> Option<u64> {
-        self.last_bits
     }
 
     pub fn read_bit(&mut self, level: bool) {
@@ -71,12 +51,18 @@ impl MyDecoder {
             rprintln!("{}", self.current_count / Wrapping(100));
         }
         if level != self.current_level {
+            if self.last_pause > 0 {
+                rprintln!("Level: {}, pause: {}", self.current_level, self.last_pause);
+            }
+            self.last_pause = 0;
             self.current_level = level;
             self.last_transition = self.current_count;
         } else {
             let diff = self.current_count - self.last_transition;
-            if diff >= Wrapping(20) {
-                rprintln!("long pause {} level: {}", diff, level);
+            if diff >= Wrapping(30) {
+                if let Wrapping(d) = diff {
+                    self.last_pause = d;
+                }
             }
         }
         self.current_count += Wrapping(1);
@@ -95,6 +81,7 @@ const APP: () = {
         decoder: MyDecoder,
         rtc: Rtc,
         timer_count: u16,
+        synchronized: bool,
     }
     #[init(spawn=[])]
     fn init(cx: init::Context) -> init::LateResources {
@@ -137,7 +124,7 @@ const APP: () = {
         timer.listen(Event::TimeOut);
         let timing = Timing::new();
         let mut rtc = Rtc::new(device.RTC, 255, 127, false, &mut pwr);
-        rtc.set_time(&NaiveTime::from_hms(21, 37, 0))
+        rtc.set_time(&NaiveTime::from_hms(21, 50, 0))
             .expect("to set time");
         rtc.set_date(&NaiveDate::from_ymd(2021, 09, 15))
             .expect("to set date");
@@ -152,6 +139,7 @@ const APP: () = {
             decoder: MyDecoder::new(),
             rtc,
             timer_count: 0,
+            synchronized: false,
         }
     }
 
@@ -170,7 +158,7 @@ const APP: () = {
     }
     */
 
-    #[task(binds = TIM2, priority=2, resources=[timer, timing, decoder, dcf_pin, segment_display, rtc, timer_count])]
+    #[task(binds = TIM2, priority=2, resources=[timer, timing, decoder, dcf_pin, segment_display, rtc, timer_count, synchronized])]
     fn tim2(cx: tim2::Context) {
         cx.resources.timer.clear_interrupt(Event::TimeOut);
         //        cx.resources.timing.event(ClockEvent::TimerExpired);
@@ -181,7 +169,12 @@ const APP: () = {
         let display = cx.resources.segment_display;
         //show_new_time(decoder.last_bits(), display);
         let time_display_idx = ((*cx.resources.timer_count / 300) % 4) as u8;
-        show_rtc_time(cx.resources.rtc, display, time_display_idx);
+        show_rtc_time(
+            cx.resources.rtc,
+            display,
+            time_display_idx,
+            *cx.resources.synchronized,
+        );
         *cx.resources.timer_count += 1;
         //rprintln!("TIMER2");
     }

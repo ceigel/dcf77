@@ -5,7 +5,14 @@ use dcf77::DCF77Time;
 use rtcc::{Hours, Rtcc};
 use rtt_target::rprintln;
 
-fn display_time(display: &mut SegmentDisplay, hours: u8, minutes: u8, seconds: u8) {
+fn display_time(
+    display: &mut SegmentDisplay,
+    hours: u8,
+    minutes: u8,
+    seconds: u8,
+    synchronized: bool,
+) {
+    let sync_stage = if synchronized { 0 } else { seconds % 4 + 1 };
     let d1 = (hours / 10) as u8;
     let d2 = (hours % 10) as u8;
     let d3 = (minutes / 10) as u8;
@@ -15,7 +22,10 @@ fn display_time(display: &mut SegmentDisplay, hours: u8, minutes: u8, seconds: u
     display.update_buffer_with_digit(Index::Three, d3);
     display.update_buffer_with_digit(Index::Four, d4);
     display.update_buffer_with_colon(seconds % 2 == 1);
-    display.update_buffer_with_dot(Index::Two, false);
+    display.update_buffer_with_dot(Index::One, sync_stage == 1);
+    display.update_buffer_with_dot(Index::Two, sync_stage == 2);
+    display.update_buffer_with_dot(Index::Three, sync_stage == 3);
+    display.update_buffer_with_dot(Index::Four, sync_stage == 4);
     display
         .write_display_buffer()
         .expect("Could not write 7-segment display");
@@ -97,7 +107,7 @@ pub(crate) fn show_new_time(data: Option<u64>, display: &mut SegmentDisplay) {
                     }
                     (Ok(hours), Ok(minutes)) => {
                         rprintln!("Time: {}:{}", hours, minutes);
-                        display_time(display, hours, minutes, 0);
+                        display_time(display, hours, minutes, 0, true);
                     }
                 }
             }
@@ -108,18 +118,23 @@ pub(crate) fn show_new_time(data: Option<u64>, display: &mut SegmentDisplay) {
         .expect("Could not write 7-segment display");
 }
 
-pub(crate) fn show_rtc_time(rtc: &mut Rtc, display: &mut SegmentDisplay, idx: u8) {
+pub(crate) fn show_rtc_time(
+    rtc: &mut Rtc,
+    display: &mut SegmentDisplay,
+    idx: u8,
+    synchronized: bool,
+) {
+    let s = rtc.get_seconds().expect("to read seconds");
     match idx {
         0 | 1 => {
             let h = rtc.get_hours().expect("to read hours");
             let m = rtc.get_minutes().expect("to read minutes");
-            let s = rtc.get_seconds().expect("to read seconds");
             let hours = match h {
                 Hours::AM(hours) => hours,
                 Hours::PM(hours) => hours,
                 Hours::H24(hours) => hours,
             };
-            display_time(display, hours, m, s);
+            display_time(display, hours, m, s, synchronized);
         }
         2 => {
             let d = rtc.get_day().expect("to read days");
