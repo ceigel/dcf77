@@ -185,7 +185,12 @@ const APP: () = {
         let decoder = cx.resources.decoder;
         decoder.read_bit(!pin_high);
 
-        rprintln!("{}", decoder.seconds());
+        if decoder.bit_faulty() {
+            rprintln("bit faulty");
+        }
+        if decoder.bit_complete() {
+            rprintln!("{}", decoder.seconds());
+        }
         let mut data: Option<u64> = None;
         if decoder.end_of_cycle() {
             data.replace(decoder.raw_data());
