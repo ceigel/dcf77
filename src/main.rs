@@ -1,17 +1,16 @@
 #![no_std]
 #![no_main]
 extern crate heapless;
+mod cycles_computer;
 mod decoder;
 mod frequency;
+mod time_display;
 
 use crate::frequency::ClockEvent;
 use crate::frequency::Timing;
-mod cycles_computer;
 use crate::stm32f4xx_hal::i2c::I2c;
-use dcf77::DCF77Time;
 use panic_rtt_target as _;
 
-use adafruit_7segment::{AsciiChar, Index, SevenSegment};
 use core::num::Wrapping;
 use core::time;
 use cortex_m::peripheral::DWT;
@@ -19,111 +18,16 @@ use cycles_computer::CyclesComputer;
 use feather_f405::hal as stm32f4xx_hal;
 use feather_f405::{hal::prelude::*, pac, setup_clocks};
 use ht16k33::{Dimming, Display, HT16K33};
+use rtcc::{NaiveDate, NaiveTime, Rtcc};
 use rtic::app;
 use rtt_target::{rprintln, rtt_init_print};
-use stm32f4xx_hal::gpio::{gpioa, gpiob, AlternateOD, Input, PullUp, AF4};
+use stm32f4xx_hal::gpio::{gpioa, gpiob, AlternateOD, Floating, Input, AF4};
+use stm32f4xx_hal::rtc::Rtc;
 use stm32f4xx_hal::timer::{Event, Timer};
+use time_display::{display_error, show_new_time, show_rtc_time};
 
-fn display_time(
-    display: &mut HT16K33<
-        I2c<pac::I2C1, (gpiob::PB6<AlternateOD<AF4>>, gpiob::PB7<AlternateOD<AF4>>)>,
-    >,
-    hours: u8,
-    minutes: u8,
-) {
-    let d1 = (hours / 10) as u8;
-    let d2 = (hours % 10) as u8;
-    let d3 = (minutes / 10) as u8;
-    let d4 = (minutes % 10) as u8;
-    display.update_buffer_with_digit(Index::One, d1);
-    display.update_buffer_with_digit(Index::Two, d2);
-    display.update_buffer_with_digit(Index::Three, d3);
-    display.update_buffer_with_digit(Index::Four, d4);
-    display.update_buffer_with_colon(true);
-}
-
-fn display_error(
-    display: &mut HT16K33<
-        I2c<pac::I2C1, (gpiob::PB6<AlternateOD<AF4>>, gpiob::PB7<AlternateOD<AF4>>)>,
-    >,
-) {
-    display
-        .update_buffer_with_char(Index::One, AsciiChar::Minus)
-        .expect("display minus");
-    display
-        .update_buffer_with_char(Index::Two, AsciiChar::Minus)
-        .expect("display minus");
-    display
-        .update_buffer_with_char(Index::Three, AsciiChar::Minus)
-        .expect("display minus");
-    display
-        .update_buffer_with_char(Index::Four, AsciiChar::Minus)
-        .expect("display minus");
-    display.update_buffer_with_colon(false);
-}
-
-fn show_new_time(
-    data: Option<u64>,
-    display: &mut HT16K33<
-        I2c<pac::I2C1, (gpiob::PB6<AlternateOD<AF4>>, gpiob::PB7<AlternateOD<AF4>>)>,
-    >,
-) {
-    match data {
-        None => {
-            display_error(display);
-        }
-        Some(data) => {
-            let time_decoder = DCF77Time::new(data);
-            if time_decoder.validate_start().is_ok() {
-                rprintln!("No start");
-            } else {
-                match (time_decoder.hours(), time_decoder.minutes()) {
-                    (Err(_), Err(_)) => {
-                        rprintln!("hours and minutes error");
-                        display_error(display);
-                    }
-                    (Err(_), _) => {
-                        rprintln!("hours error");
-                        display_error(display);
-                    }
-                    (_, Err(_)) => {
-                        rprintln!("minutes error");
-                        display_error(display);
-                    }
-                    (Ok(hours), Ok(minutes)) => {
-                        rprintln!("Time: {}:{}", hours, minutes);
-                        display_time(display, hours, minutes);
-                    }
-                }
-            }
-        }
-    }
-    display
-        .write_display_buffer()
-        .expect("Could not write 7-segment display");
-}
-
-const VALID_TRANSITION_TIME: Wrapping<u64> = Wrapping(20);
-struct TransitionCandidate {
-    pub(crate) level: bool,
-    pub(crate) time: Wrapping<u64>,
-}
-
-impl TransitionCandidate {
-    pub fn new(level: bool, time: u64) -> Self {
-        Self {
-            level,
-            time: Wrapping(time),
-        }
-    }
-    pub fn valid(&self, current: u64) -> bool {
-        if self.time - Wrapping(current) > VALID_TRANSITION_TIME {
-            true
-        } else {
-            false
-        }
-    }
-}
+type SegmentDisplay =
+    HT16K33<I2c<pac::I2C1, (gpiob::PB6<AlternateOD<AF4>>, gpiob::PB7<AlternateOD<AF4>>)>>;
 
 pub struct MyDecoder {
     bits: u64,
@@ -144,7 +48,7 @@ impl MyDecoder {
             seconds_changed: false,
             data_pos: 0,
             current_count: Wrapping(0),
-            current_level: true,
+            current_level: false,
             last_transition: Wrapping(0),
             last_bits: None,
         }
@@ -163,43 +67,16 @@ impl MyDecoder {
     }
 
     pub fn read_bit(&mut self, level: bool) {
+        if self.current_count % Wrapping(100) == Wrapping(0) {
+            rprintln!("{}", self.current_count / Wrapping(100));
+        }
         if level != self.current_level {
-            if level == true {
-                if self.current_count - self.last_transition >= Wrapping(9) {
-                    rprintln!("Transition up {:?}", self.current_count / Wrapping(100));
-                    let datapos = self.data_pos;
-                    self.data_pos = if self.data_pos < 60 {
-                        self.data_pos + 1
-                    } else {
-                        0
-                    };
-
-                    if self.current_count - self.last_transition > Wrapping(18) {
-                        self.bits = self.bits | (1 << datapos); // bit == 1
-                    } else if self.current_count - self.last_transition >= Wrapping(9) {
-                        self.bits = self.bits & !(1 << datapos); // bit == 0
-                    } else {
-                        rprintln!("Transition too short");
-                    }
-                    self.seconds += 1;
-                    self.seconds_changed = true;
-
-                    self.current_level = level;
-                    self.last_transition = self.current_count;
-                }
-            } else {
-                if self.current_count - self.last_transition >= Wrapping(90) {
-                    rprintln!("Transition down {:?}", self.current_count / Wrapping(100));
-                    if self.current_count - self.last_transition > Wrapping(180) {
-                        // minute end
-                        rprintln!("minute ended");
-                        self.data_pos = 0;
-                        self.seconds = 0;
-                        self.last_bits.replace(self.bits);
-                    }
-                    self.current_level = level;
-                    self.last_transition = self.current_count;
-                }
+            self.current_level = level;
+            self.last_transition = self.current_count;
+        } else {
+            let diff = self.current_count - self.last_transition;
+            if diff >= Wrapping(20) {
+                rprintln!("long pause {} level: {}", diff, level);
             }
         }
         self.current_count += Wrapping(1);
@@ -209,14 +86,15 @@ const DISP_I2C_ADDR: u8 = 0x77;
 #[app(device = feather_f405::hal::stm32, monotonic = rtic::cyccnt::CYCCNT, peripherals = true)]
 const APP: () = {
     struct Resources {
-        segment_display:
-            HT16K33<I2c<pac::I2C1, (gpiob::PB6<AlternateOD<AF4>>, gpiob::PB7<AlternateOD<AF4>>)>>,
-        dcf_pin: gpioa::PA<Input<PullUp>>,
+        segment_display: SegmentDisplay,
+        dcf_pin: gpioa::PA<Input<Floating>>,
         timer: Timer<pac::TIM2>,
         timing: Timing,
         cycles_computer: CyclesComputer,
         val: u16,
         decoder: MyDecoder,
+        rtc: Rtc,
+        timer_count: u16,
     }
     #[init(spawn=[])]
     fn init(cx: init::Context) -> init::LateResources {
@@ -231,6 +109,7 @@ const APP: () = {
         let clocks = setup_clocks(device.RCC);
         let _syscfg = device.SYSCFG.constrain();
         let _exti = device.EXTI;
+        let mut pwr = device.PWR;
 
         let gpiob = device.GPIOB.split();
         let scl = gpiob.pb6.into_alternate_af4().set_open_drain();
@@ -245,8 +124,11 @@ const APP: () = {
             .set_dimming(Dimming::BRIGHTNESS_MAX)
             .expect("Could not set dimming!");
         display_error(&mut ht16k33);
+        ht16k33
+            .write_display_buffer()
+            .expect("Could not write 7-segment display");
         let gpioa = device.GPIOA.split();
-        let pin = gpioa.pa6.into_pull_up_input().downgrade();
+        let pin = gpioa.pa6.into_floating_input().downgrade();
         //pa6.make_interrupt_source(&mut syscfg);
         //pa6.trigger_on_edge(&mut exti, Edge::RISING_FALLING);
         //pa6.enable_interrupt(&mut exti);
@@ -254,6 +136,11 @@ const APP: () = {
         let mut timer = Timer::tim2(device.TIM2, 100.hz(), clocks);
         timer.listen(Event::TimeOut);
         let timing = Timing::new();
+        let mut rtc = Rtc::new(device.RTC, 255, 127, false, &mut pwr);
+        rtc.set_time(&NaiveTime::from_hms(21, 37, 0))
+            .expect("to set time");
+        rtc.set_date(&NaiveDate::from_ymd(2021, 09, 15))
+            .expect("to set date");
         rprintln!("Init successful");
         init::LateResources {
             segment_display: ht16k33,
@@ -263,6 +150,8 @@ const APP: () = {
             cycles_computer: CyclesComputer::new(clocks.sysclk()),
             val: 0,
             decoder: MyDecoder::new(),
+            rtc,
+            timer_count: 0,
         }
     }
 
@@ -281,7 +170,7 @@ const APP: () = {
     }
     */
 
-    #[task(binds = TIM2, priority=2, resources=[timer, timing, decoder, dcf_pin, segment_display])]
+    #[task(binds = TIM2, priority=2, resources=[timer, timing, decoder, dcf_pin, segment_display, rtc, timer_count])]
     fn tim2(cx: tim2::Context) {
         cx.resources.timer.clear_interrupt(Event::TimeOut);
         //        cx.resources.timing.event(ClockEvent::TimerExpired);
@@ -289,11 +178,11 @@ const APP: () = {
         let decoder = cx.resources.decoder;
         decoder.read_bit(pin_high);
 
-        if decoder.seconds_changed() {
-            rprintln!("{}", decoder.read_seconds());
-        }
         let display = cx.resources.segment_display;
-        show_new_time(decoder.last_bits(), display);
+        //show_new_time(decoder.last_bits(), display);
+        let time_display_idx = ((*cx.resources.timer_count / 300) % 4) as u8;
+        show_rtc_time(cx.resources.rtc, display, time_display_idx);
+        *cx.resources.timer_count += 1;
         //rprintln!("TIMER2");
     }
 
