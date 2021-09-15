@@ -12,6 +12,7 @@ use dcf77::{DCF77Time, SimpleDCF77Decoder};
 use panic_rtt_target as _;
 
 use adafruit_7segment::{AsciiChar, Index, SevenSegment};
+use core::num::Wrapping;
 use core::time;
 use cortex_m::peripheral::DWT;
 use cycles_computer::CyclesComputer;
@@ -102,6 +103,39 @@ fn show_new_time(
         .expect("Could not write 7-segment display");
 }
 
+/*
+const VALID_TRANSITION_TIME:u64 = 20;
+struct TransitionCandidate {
+    pub(crate) level:bool;
+    pub(crate) time:u64;
+}
+
+impl TransitionCandidate {
+    pub fn valid(&self, current:u64) {
+    if wrapping_sub(self.current_count, self.last_transition) > 20 {
+    }
+    }
+}
+
+struct MyDecoder {
+    bits: u64,
+    current_count: u64,
+    last_level: bool,
+    last_transition: u64,
+}
+
+impl MyDecoder {
+    pub fn read_bit(&mut self, bit: bool) {
+        if self.last_level != bit {
+            if wrapping_sub(self.current_count, self.last_transition) > 20 {
+                self.last_level = bit;
+            }
+        }
+        self.current_count += 1;
+    }
+}
+*/
+
 const DISP_I2C_ADDR: u8 = 0x77;
 #[app(device = feather_f405::hal::stm32, monotonic = rtic::cyccnt::CYCCNT, peripherals = true)]
 const APP: () = {
@@ -187,7 +221,7 @@ const APP: () = {
         decoder.read_bit(!pin_high);
 
         if decoder.bit_faulty() {
-            rprintln("bit faulty");
+            rprintln!("bit faulty");
         }
         if decoder.bit_complete() {
             rprintln!("{}", decoder.seconds());
