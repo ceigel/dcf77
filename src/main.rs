@@ -1,7 +1,10 @@
 #![no_std]
 #![no_main]
 extern crate heapless;
+mod frequency;
 
+use crate::frequency::ClockEvent;
+use crate::frequency::Timing;
 use crate::stm32f4xx_hal::i2c::I2c;
 use panic_rtt_target as _;
 
@@ -13,16 +16,7 @@ use ht16k33::{Dimming, Display, HT16K33};
 use rtic::app;
 use rtt_target::{rprintln, rtt_init_print};
 use stm32f4xx_hal::gpio::{gpioa, Edge, ExtiPin, Input, PullUp};
-use stm32f4xx_hal::prelude::*;
 use stm32f4xx_hal::timer::{Event, Timer};
-
-pub struct Timing {}
-
-impl Timing {
-    pub fn hello(&self) {
-        rprintln!("Hello");
-    }
-}
 
 #[app(device = feather_f405::hal::stm32, monotonic = rtic::cyccnt::CYCCNT, peripherals = true)]
 const APP: () = {
@@ -50,20 +44,20 @@ const APP: () = {
         let sda = gpiob.pb7.into_alternate_af4().set_open_drain();
         let i2c = I2c::new(device.I2C1, (scl, sda), 400.khz(), clocks);
         const DISP_I2C_ADDR: u8 = 112;
-        let mut ht16k33 = HT16K33::new(i2c, DISP_I2C_ADDR);
-        ht16k33.initialize().expect("Failed to initialize ht16k33");
-        ht16k33
-            .set_display(Display::ON)
-            .expect("Could not turn on the display!");
-        ht16k33
-            .set_dimming(Dimming::BRIGHTNESS_MIN)
-            .expect("Could not set dimming!");
+        // let mut ht16k33 = HT16K33::new(i2c, DISP_I2C_ADDR);
+        // ht16k33.initialize().expect("Failed to initialize ht16k33");
+        // ht16k33
+        //     .set_display(Display::ON)
+        //     .expect("Could not turn on the display!");
+        // ht16k33
+        //     .set_dimming(Dimming::BRIGHTNESS_MIN)
+        //     .expect("Could not set dimming!");
 
-        // Sending individual digits
-        ht16k33.update_buffer_with_digit(Index::One, 1);
-        ht16k33.update_buffer_with_digit(Index::Two, 2);
-        ht16k33.update_buffer_with_digit(Index::Three, 3);
-        ht16k33.update_buffer_with_digit(Index::Four, 4);
+        // // Sending individual digits
+        // ht16k33.update_buffer_with_digit(Index::One, 1);
+        // ht16k33.update_buffer_with_digit(Index::Two, 2);
+        // ht16k33.update_buffer_with_digit(Index::Three, 3);
+        // ht16k33.update_buffer_with_digit(Index::Four, 4);
 
         let gpioa = device.GPIOA.split();
         let mut pa6 = gpioa.pa6.into_pull_up_input().downgrade();
@@ -71,9 +65,9 @@ const APP: () = {
         pa6.trigger_on_edge(&mut exti, Edge::RISING_FALLING);
         pa6.enable_interrupt(&mut exti);
 
-        let mut timer = Timer::tim2(device.TIM2, 10.mhz(), clocks);
+        let mut timer = Timer::tim2(device.TIM2, 10.hz(), clocks);
         timer.listen(Event::TimeOut);
-        let timing = Timing {};
+        let timing = Timing::new();
         rprintln!("Init successful");
         cx.spawn.say_hello().expect("To start say hello task");
         init::LateResources {
@@ -99,14 +93,14 @@ const APP: () = {
     #[task(binds = EXTI9_5, priority=8, resources=[input_pin, timing])]
     fn exti9_5(cx: exti9_5::Context) {
         cx.resources.input_pin.clear_interrupt_pending_bit();
-        cx.resources.timing.hello();
+        cx.resources.timing.event(ClockEvent::SignalDetected(42));
         //rprintln!("SIGNAL");
     }
 
     #[task(binds = TIM2, priority=8, resources=[timer, timing])]
     fn tim2(cx: tim2::Context) {
         cx.resources.timer.clear_interrupt(Event::TimeOut);
-        cx.resources.timing.hello();
+        cx.resources.timing.event(ClockEvent::TimerExpired);
         //rprintln!("TIMER2");
     }
 
