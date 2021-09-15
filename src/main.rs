@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 extern crate heapless;
+mod decoder;
 mod frequency;
 
 use crate::frequency::ClockEvent;
