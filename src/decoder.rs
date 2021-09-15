@@ -413,6 +413,7 @@ impl DCF77Time {
     }
 }
 
+/*
 enum SimpleDCF77DecoderState {
     WaitingForPhase,
     PhaseFound,
@@ -560,3 +561,4 @@ impl SimpleDCF77Decoder {
         self.scancount += 1;
     }
 }
+*/

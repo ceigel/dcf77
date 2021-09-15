@@ -8,7 +8,7 @@ use crate::frequency::ClockEvent;
 use crate::frequency::Timing;
 mod cycles_computer;
 use crate::stm32f4xx_hal::i2c::I2c;
-use dcf77::{DCF77Time, SimpleDCF77Decoder};
+use dcf77::DCF77Time;
 use panic_rtt_target as _;
 
 use adafruit_7segment::{AsciiChar, Index, SevenSegment};
@@ -103,39 +103,102 @@ fn show_new_time(
         .expect("Could not write 7-segment display");
 }
 
-/*
-const VALID_TRANSITION_TIME:u64 = 20;
+const VALID_TRANSITION_TIME: Wrapping<u64> = Wrapping(20);
 struct TransitionCandidate {
-    pub(crate) level:bool;
-    pub(crate) time:u64;
+    pub(crate) level: bool,
+    pub(crate) time: Wrapping<u64>,
 }
 
 impl TransitionCandidate {
-    pub fn valid(&self, current:u64) {
-    if wrapping_sub(self.current_count, self.last_transition) > 20 {
+    pub fn new(level: bool, time: u64) -> Self {
+        Self {
+            level,
+            time: Wrapping(time),
+        }
     }
+    pub fn valid(&self, current: u64) -> bool {
+        if self.time - Wrapping(current) > VALID_TRANSITION_TIME {
+            true
+        } else {
+            false
+        }
     }
 }
 
-struct MyDecoder {
+pub struct MyDecoder {
     bits: u64,
-    current_count: u64,
-    last_level: bool,
-    last_transition: u64,
+    seconds: u8,
+    seconds_changed: bool,
+    data_pos: u16,
+    current_count: Wrapping<u64>,
+    current_level: bool,
+    last_transition: Wrapping<u64>,
+    last_bits: Option<u64>,
 }
 
 impl MyDecoder {
-    pub fn read_bit(&mut self, bit: bool) {
-        if self.last_level != bit {
-            if wrapping_sub(self.current_count, self.last_transition) > 20 {
-                self.last_level = bit;
+    pub fn new() -> Self {
+        Self {
+            bits: 0,
+            seconds: 0,
+            seconds_changed: false,
+            data_pos: 0,
+            current_count: Wrapping(0),
+            current_level: true,
+            last_transition: Wrapping(0),
+            last_bits: None,
+        }
+    }
+    pub fn read_seconds(&mut self) -> u8 {
+        self.seconds_changed = false;
+        self.seconds
+    }
+
+    pub fn seconds_changed(&self) -> bool {
+        self.seconds_changed
+    }
+
+    pub fn last_bits(&self) -> Option<u64> {
+        self.last_bits
+    }
+
+    pub fn read_bit(&mut self, level: bool) {
+        if level != self.current_level {
+            if self.current_count - self.last_transition >= Wrapping(90) {
+                if self.current_level == false {
+                    rprintln!("Transition up {}", self.current_count);
+                    let datapos = self.data_pos;
+                    self.data_pos = if self.data_pos < 60 {
+                        self.data_pos + 1
+                    } else {
+                        0
+                    };
+
+                    if self.current_count - self.last_transition > Wrapping(180) {
+                        self.bits = self.bits | (1 << datapos); // bit == 1
+                    } else if self.current_count - self.last_transition >= Wrapping(90) {
+                        self.bits = self.bits & !(1 << datapos); // bit == 0
+                    } else {
+                        rprintln!("Transition too short");
+                    }
+                    self.seconds += 1;
+                    self.seconds_changed = true;
+                } else {
+                    if self.current_count - self.last_transition > Wrapping(180) {
+                        // minute end
+                        rprintln!("minute ended");
+                        self.data_pos = 0;
+                        self.seconds = 0;
+                        self.last_bits.replace(self.bits);
+                    }
+                }
+                self.current_level = level;
+                self.last_transition = self.current_count;
             }
         }
-        self.current_count += 1;
+        self.current_count += Wrapping(1);
     }
 }
-*/
-
 const DISP_I2C_ADDR: u8 = 0x77;
 #[app(device = feather_f405::hal::stm32, monotonic = rtic::cyccnt::CYCCNT, peripherals = true)]
 const APP: () = {
@@ -147,7 +210,7 @@ const APP: () = {
         timing: Timing,
         cycles_computer: CyclesComputer,
         val: u16,
-        decoder: SimpleDCF77Decoder,
+        decoder: MyDecoder,
     }
     #[init(spawn=[])]
     fn init(cx: init::Context) -> init::LateResources {
@@ -177,7 +240,7 @@ const APP: () = {
             .expect("Could not set dimming!");
         display_error(&mut ht16k33);
         let gpioa = device.GPIOA.split();
-        let pa6 = gpioa.pa6.into_pull_up_input().downgrade();
+        let pin = gpioa.pa6.into_pull_up_input().downgrade();
         //pa6.make_interrupt_source(&mut syscfg);
         //pa6.trigger_on_edge(&mut exti, Edge::RISING_FALLING);
         //pa6.enable_interrupt(&mut exti);
@@ -188,12 +251,12 @@ const APP: () = {
         rprintln!("Init successful");
         init::LateResources {
             segment_display: ht16k33,
-            dcf_pin: pa6,
+            dcf_pin: pin,
             timer,
             timing,
             cycles_computer: CyclesComputer::new(clocks.sysclk()),
             val: 0,
-            decoder: SimpleDCF77Decoder::new(),
+            decoder: MyDecoder::new(),
         }
     }
 
@@ -218,23 +281,13 @@ const APP: () = {
         //        cx.resources.timing.event(ClockEvent::TimerExpired);
         let pin_high = cx.resources.dcf_pin.is_high().unwrap();
         let decoder = cx.resources.decoder;
-        decoder.read_bit(!pin_high);
+        decoder.read_bit(pin_high);
 
-        if decoder.bit_faulty() {
-            rprintln!("bit faulty");
-        }
-        if decoder.bit_complete() {
-            rprintln!("{}", decoder.seconds());
-        }
-        let mut data: Option<u64> = None;
-        if decoder.end_of_cycle() {
-            data.replace(decoder.raw_data());
-            rprintln!("end of cycle");
-        } else {
-            data.take();
+        if decoder.seconds_changed() {
+            rprintln!("{}", decoder.read_seconds());
         }
         let display = cx.resources.segment_display;
-        show_new_time(data, display);
+        show_new_time(decoder.last_bits(), display);
         //rprintln!("TIMER2");
     }
 
