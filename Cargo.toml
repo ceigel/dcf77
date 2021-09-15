@@ -1,7 +1,7 @@
 [package]
 # TODO(1) fix `authors` and `name` if you didn't use `cargo-generate`
 authors = ["Cristian Eigel <cristian.eigel@esrlabs.com>"]
-name = "dcf77"
+name = "feather-dcf77"
 edition = "2018"
 version = "0.1.0"
 
@@ -14,6 +14,7 @@ rtt-target = {version= "0.3.1",  features = ["cortex-m"] }
 ht16k33 = { version = "0.4.0", default-features = false }
 adafruit-7segment = { version = "0.1.0", default-features = false  }
 chrono = {version = "0.4.19", default-features=false}
+dcf77 = "0.1.0"
 
 [dependencies.feather-f405]
 version = "0.2.0"
