@@ -3,10 +3,12 @@
 extern crate heapless;
 mod cycles_computer;
 mod datetime_converter;
+mod dcf77_decoder;
 mod time_display;
 
 use crate::stm32f4xx_hal::i2c::I2c;
 use datetime_converter::DCF77DateTimeConverter;
+use dcf77_decoder::DCF77Decoder;
 use panic_rtt_target as _;
 
 use chrono::naive::NaiveDateTime;
@@ -27,107 +29,10 @@ use time_display::{display_error, show_rtc_time};
 type SegmentDisplay =
     HT16K33<I2c<pac::I2C1, (gpiob::PB6<AlternateOD<AF4>>, gpiob::PB7<AlternateOD<AF4>>)>>;
 
-pub struct SignalSmoother<const X: usize> {
-    buf: [bool; X],
-    last_val: bool,
-}
-
-impl<const X: usize> SignalSmoother<X> {
-    pub fn new() -> Self {
-        Self {
-            buf: [true; X],
-            last_val: true,
-        }
-    }
-    pub fn add_signal(&mut self, sig: bool) -> bool {
-        self.buf.rotate_left(1);
-        self.buf[X - 1] = sig;
-        if self.buf.iter().all(|x| *x != self.last_val) {
-            self.last_val = !self.last_val;
-        }
-        self.last_val
-    }
-}
-
 fn sync_rtc(rtc: &mut Rtc, dt: &NaiveDateTime) {
     rtc.set_datetime(dt).expect("To be able to set datetime");
 }
 
-pub struct MyDecoder {
-    current_count: Wrapping<u64>,
-    current_level: bool,
-    last_transition: Wrapping<u64>,
-    current_pause: u64,
-    smoother: SignalSmoother<7>,
-    start_detected: bool,
-    current_bits: u64,
-    last_bits: Option<u64>,
-    bit_pos: usize,
-}
-
-impl MyDecoder {
-    pub fn new() -> Self {
-        Self {
-            current_count: Wrapping(0),
-            current_level: false,
-            last_transition: Wrapping(0),
-            current_pause: 0,
-            smoother: SignalSmoother::new(),
-            start_detected: false,
-            current_bits: 0,
-            last_bits: None,
-            bit_pos: 0,
-        }
-    }
-
-    pub fn reset_last_bits(&mut self) {
-        self.last_bits.take();
-    }
-    pub fn last_bits(&self) -> Option<u64> {
-        self.last_bits
-    }
-    pub fn read_bit(&mut self, level: bool) {
-        let level = self.smoother.add_signal(level);
-        if level != self.current_level {
-            if self.current_pause > 0 {
-                if self.current_level == true && self.current_pause > 150 {
-                    rprintln!("Minute mark {}", self.current_pause);
-                    if self.start_detected {
-                        self.last_bits.replace(self.current_bits);
-                        rprintln!("Data: {:060b}", self.current_bits);
-                    } else {
-                        self.start_detected = true;
-                    }
-                    self.bit_pos = 59;
-                    self.current_bits = 0;
-                } else if self.start_detected && self.current_level == false {
-                    if self.current_pause >= 15 {
-                        self.current_bits |= 1 << self.bit_pos
-                    } else {
-                        self.current_bits &= !(1 << self.bit_pos)
-                    }
-                    if self.bit_pos == 00 {
-                        rprintln!("Bits overrun");
-                        self.bit_pos = 59;
-                        self.last_bits.replace(self.current_bits);
-                        rprintln!("Data: {:060b}", self.current_bits);
-                        self.start_detected = false
-                    } else {
-                        self.bit_pos -= 1;
-                    }
-                }
-            }
-            self.current_pause = 0;
-            self.current_level = level;
-            self.last_transition = self.current_count;
-        } else {
-            let diff = self.current_count - self.last_transition;
-            let Wrapping(d) = diff;
-            self.current_pause = d;
-        }
-        self.current_count += Wrapping(1);
-    }
-}
 const DISP_I2C_ADDR: u8 = 0x77;
 #[app(device = feather_f405::hal::stm32, monotonic = rtic::cyccnt::CYCCNT, peripherals = true)]
 const APP: () = {
@@ -137,7 +42,7 @@ const APP: () = {
         timer: Timer<pac::TIM2>,
         cycles_computer: CyclesComputer,
         val: u16,
-        decoder: MyDecoder,
+        decoder: DCF77Decoder,
         rtc: Rtc,
         timer_count: Wrapping<u32>,
         synchronized: bool,
@@ -189,7 +94,7 @@ const APP: () = {
             timer,
             cycles_computer: CyclesComputer::new(clocks.sysclk()),
             val: 0,
-            decoder: MyDecoder::new(),
+            decoder: DCF77Decoder::new(),
             rtc,
             timer_count: Wrapping(0),
             synchronized: false,

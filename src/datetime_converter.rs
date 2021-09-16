@@ -22,6 +22,13 @@ pub struct DCF77DateTimeConverter {
     bcd: [u32; 8],
 }
 
+const THREE_BITS: u64 = (1 << 3) - 1;
+const FIVE_BITS: u64 = (1 << 5) - 1;
+const SIX_BITS: u64 = (1 << 6) - 1;
+const SEVEN_BITS: u64 = (1 << 7) - 1;
+const EIGHT_BITS: u64 = (1 << 8) - 1;
+const TWENTYTWO_BITS: u64 = (1 << 22) - 1;
+
 impl DCF77DateTimeConverter {
     pub fn new(dcf77_data: u64) -> Self {
         DCF77DateTimeConverter {
@@ -31,23 +38,23 @@ impl DCF77DateTimeConverter {
     }
 
     pub fn dcf77_decoder(&self) -> Result<NaiveDateTime, DateTimeErr> {
-        if ((self.encoded_data >> 39) & 1) != 1 {
+        if ((self.encoded_data >> 20) & 1) != 1 {
             return Err(DateTimeErr::WrongStart);
         }
-        let year = ((self.encoded_data >> 2) & 0b11111111) as u32;
-        let month = ((self.encoded_data >> 10) & 0b11111) as u32;
-        let _weekday = ((self.encoded_data >> 15) & 0b111) as u32;
-        let day = ((self.encoded_data >> 18) & 0b111111) as u32;
-        let datetime_frame = ((self.encoded_data >> 2) & 0b1111111111111111111111) as u32;
-        let hours = ((self.encoded_data >> 25) & 0b111111) as u32;
-        let minutes = ((self.encoded_data >> 32) & 0b1111111) as u32;
+        let year = ((self.encoded_data >> 50) & EIGHT_BITS) as u32;
+        let month = ((self.encoded_data >> 45) & FIVE_BITS) as u32;
+        let _weekday = ((self.encoded_data >> 42) & THREE_BITS) as u32;
+        let day = ((self.encoded_data >> 36) & SIX_BITS) as u32;
+        let datetime_frame = ((self.encoded_data >> 36) & TWENTYTWO_BITS) as u32;
+        let hours = ((self.encoded_data >> 29) & SIX_BITS) as u32;
+        let minutes = ((self.encoded_data >> 21) & SEVEN_BITS) as u32;
 
         let check_datetime_parity: bool = DCF77DateTimeConverter::check_parity(datetime_frame)
-            == ((self.encoded_data >> 1) & 1) as u32;
+            == ((self.encoded_data >> 58) & 1) as u32;
         let check_hours_parity: bool =
-            DCF77DateTimeConverter::check_parity(hours) == ((self.encoded_data >> 24) & 1) as u32;
+            DCF77DateTimeConverter::check_parity(hours) == ((self.encoded_data >> 35) & 1) as u32;
         let check_minutes_parity: bool =
-            DCF77DateTimeConverter::check_parity(minutes) == ((self.encoded_data >> 31) & 1) as u32;
+            DCF77DateTimeConverter::check_parity(minutes) == ((self.encoded_data >> 28) & 1) as u32;
 
         if !check_datetime_parity {
             return Err(DateTimeErr::DateWrong);
@@ -88,21 +95,21 @@ impl DCF77DateTimeConverter {
     fn naive_year(&self, year_dcf77: u32) -> u32 {
         let mut naive_year = 2000;
         for bit in 0..8 {
-            naive_year += self.bcd[bit] * ((year_dcf77 >> 7 - bit) & 1)
+            naive_year += self.bcd[bit] * ((year_dcf77 >> bit) & 1)
         }
         naive_year
     }
     fn naive_month(&self, month_dcf77: u32) -> u32 {
         let mut naive_month = 0;
         for bit in 0..5 {
-            naive_month += self.bcd[bit] * ((month_dcf77 >> 4 - bit) & 1)
+            naive_month += self.bcd[bit] * ((month_dcf77 >> bit) & 1)
         }
         naive_month
     }
     fn naive_day_or_hours(&self, day_dcf77: u32) -> u32 {
         let mut naive_day = 0;
         for bit in 0..6 {
-            naive_day += self.bcd[bit] * ((day_dcf77 >> 5 - bit) & 1)
+            naive_day += self.bcd[bit] * ((day_dcf77 >> bit) & 1)
         }
         naive_day
     }
@@ -110,7 +117,7 @@ impl DCF77DateTimeConverter {
     fn naive_minutes(&self, minutes_dcf77: u32) -> u32 {
         let mut naive_minutes = 0;
         for bit in 0..7 {
-            naive_minutes += self.bcd[bit] * ((minutes_dcf77 >> 6 - bit) & 1)
+            naive_minutes += self.bcd[bit] * ((minutes_dcf77 >> bit) & 1)
         }
         naive_minutes
     }
@@ -121,11 +128,7 @@ impl DCF77DateTimeConverter {
     /// assert_eq!(check_parity(2806404), 1)
     /// ```
     fn check_parity(i: u32) -> u32 {
-        let mut j = i ^ (i >> 1);
-        j = j ^ (j >> 2);
-        j = j ^ (j >> 4);
-        j = j ^ (j >> 8);
-        j = j ^ (j >> 16);
-        return j & 1;
+        let count = i.count_ones();
+        return count % 2;
     }
 }
