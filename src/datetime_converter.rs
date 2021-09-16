@@ -1,8 +1,11 @@
 use chrono::naive::{NaiveDate, NaiveDateTime};
-enum DateTimeErr {
+use core::fmt::Debug;
+#[derive(Debug)]
+pub enum DateTimeErr {
     MinutesWrong,
     HoursWrong,
     DateWrong,
+    WrongStart,
 }
 
 /// Decode DCF77 binary, and output as chrono::naive::NaiveDateTime
@@ -14,7 +17,7 @@ enum DateTimeErr {
 /// // 23:14 15.Sep.2021 Deutschland (CEST)
 /// // Write me!
 /// ```
-struct DCF77DateTimeConverter {
+pub struct DCF77DateTimeConverter {
     encoded_data: u64,
     bcd: [u32; 8],
 }
@@ -28,6 +31,9 @@ impl DCF77DateTimeConverter {
     }
 
     pub fn dcf77_decoder(&self) -> Result<NaiveDateTime, DateTimeErr> {
+        if ((self.encoded_data >> 39) & 1) != 1 {
+            return Err(DateTimeErr::WrongStart);
+        }
         let year = ((self.encoded_data >> 2) & 0b11111111) as u32;
         let month = ((self.encoded_data >> 10) & 0b11111) as u32;
         let weekday = ((self.encoded_data >> 15) & 0b111) as u32;

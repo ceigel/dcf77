@@ -2,15 +2,17 @@
 #![no_main]
 extern crate heapless;
 mod cycles_computer;
-mod decoder;
+mod datetime_converter;
 mod frequency;
 mod time_display;
 
 use crate::frequency::ClockEvent;
 use crate::frequency::Timing;
 use crate::stm32f4xx_hal::i2c::I2c;
+use datetime_converter::DCF77DateTimeConverter;
 use panic_rtt_target as _;
 
+use chrono::naive::NaiveDateTime;
 use core::num::Wrapping;
 use core::time;
 use cortex_m::peripheral::DWT;
@@ -51,6 +53,10 @@ impl<const X: usize> SignalSmoother<X> {
     }
 }
 
+fn sync_rtc(rtc: &mut Rtc, dt: &NaiveDateTime) {
+    rtc.set_datetime(dt);
+}
+
 pub struct MyDecoder {
     current_count: Wrapping<u64>,
     current_level: bool,
@@ -78,6 +84,9 @@ impl MyDecoder {
         }
     }
 
+    pub fn last_bits(&self) -> Option<u64> {
+        self.last_bits
+    }
     pub fn read_bit(&mut self, level: bool) {
         let level = self.smoother.add_signal(level);
         if level != self.current_level {
@@ -171,10 +180,6 @@ const APP: () = {
         timer.listen(Event::TimeOut);
         let timing = Timing::new();
         let mut rtc = Rtc::new(device.RTC, 255, 127, false, &mut pwr);
-        rtc.set_time(&NaiveTime::from_hms(21, 50, 0))
-            .expect("to set time");
-        rtc.set_date(&NaiveDate::from_ymd(2021, 09, 15))
-            .expect("to set date");
         rprintln!("Init successful");
         init::LateResources {
             segment_display: ht16k33,
@@ -213,8 +218,20 @@ const APP: () = {
         let decoder = cx.resources.decoder;
         decoder.read_bit(pin_high);
 
+        if let Some(datetime_bits) = decoder.last_bits() {
+            let converter = DCF77DateTimeConverter::new(datetime_bits);
+            match converter.dcf77_decoder() {
+                Err(err) => {
+                    rprintln!("Decoding error: {:?}", err)
+                }
+                Ok(dt) => {
+                    rprintln!("Good date: {:?}", dt);
+                    sync_rtc(cx.resources.rtc, &dt);
+                    *cx.resources.synchronized = true;
+                }
+            }
+        }
         let display = cx.resources.segment_display;
-        //show_new_time(decoder.last_bits(), display);
         let Wrapping(timer) = *cx.resources.timer_count;
         let time_display_idx = ((timer / 300) % 4) as u8;
         show_rtc_time(
@@ -224,7 +241,6 @@ const APP: () = {
             *cx.resources.synchronized,
         );
         *cx.resources.timer_count += Wrapping(1);
-        //rprintln!("TIMER2");
     }
 
     extern "C" {
