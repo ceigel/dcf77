@@ -29,11 +29,38 @@ use time_display::{display_error, show_new_time, show_rtc_time};
 type SegmentDisplay =
     HT16K33<I2c<pac::I2C1, (gpiob::PB6<AlternateOD<AF4>>, gpiob::PB7<AlternateOD<AF4>>)>>;
 
+pub struct SignalSmoother<const X: usize> {
+    buf: [bool; X],
+    last_val: bool,
+}
+
+impl<const X: usize> SignalSmoother<X> {
+    pub fn new() -> Self {
+        Self {
+            buf: [true; X],
+            last_val: true,
+        }
+    }
+    pub fn add_signal(&mut self, sig: bool) -> bool {
+        self.buf.rotate_left(1);
+        self.buf[X - 1] = sig;
+        if self.buf.iter().all(|x| *x != self.last_val) {
+            self.last_val = !self.last_val;
+        }
+        self.last_val
+    }
+}
+
 pub struct MyDecoder {
     current_count: Wrapping<u64>,
     current_level: bool,
     last_transition: Wrapping<u64>,
-    last_pause: u64,
+    current_pause: u64,
+    smoother: SignalSmoother<7>,
+    start_detected: bool,
+    current_bits: u64,
+    last_bits: Option<u64>,
+    bit_pos: usize,
 }
 
 impl MyDecoder {
@@ -42,28 +69,48 @@ impl MyDecoder {
             current_count: Wrapping(0),
             current_level: false,
             last_transition: Wrapping(0),
-            last_pause: 0,
+            current_pause: 0,
+            smoother: SignalSmoother::new(),
+            start_detected: false,
+            current_bits: 0,
+            last_bits: None,
+            bit_pos: 0,
         }
     }
 
     pub fn read_bit(&mut self, level: bool) {
-        if self.current_count % Wrapping(100) == Wrapping(0) {
-            rprintln!("{}", self.current_count / Wrapping(100));
-        }
+        let level = self.smoother.add_signal(level);
         if level != self.current_level {
-            if self.last_pause > 0 {
-                rprintln!("Level: {}, pause: {}", self.current_level, self.last_pause);
+            if self.current_pause > 0 {
+                if self.current_level == true && self.current_pause > 130 {
+                    if self.start_detected {
+                        self.last_bits.replace(self.current_bits);
+                        rprintln!("Data: {:060b}", self.current_bits);
+                    } else {
+                        self.start_detected = true;
+                    }
+                    self.bit_pos = 60;
+                    self.current_bits = 0;
+                } else if self.start_detected && self.current_level == false {
+                    if self.current_pause >= 15 {
+                        self.current_bits |= 1 << self.bit_pos
+                    } else {
+                        self.current_bits &= !(1 << self.bit_pos)
+                    }
+                    self.bit_pos -= 1;
+                    if self.bit_pos == 00 {
+                        rprintln!("Bits overrun");
+                        self.start_detected = false
+                    }
+                }
             }
-            self.last_pause = 0;
+            self.current_pause = 0;
             self.current_level = level;
             self.last_transition = self.current_count;
         } else {
             let diff = self.current_count - self.last_transition;
-            if diff >= Wrapping(30) {
-                if let Wrapping(d) = diff {
-                    self.last_pause = d;
-                }
-            }
+            let Wrapping(d) = diff;
+            self.current_pause = d;
         }
         self.current_count += Wrapping(1);
     }
@@ -80,7 +127,7 @@ const APP: () = {
         val: u16,
         decoder: MyDecoder,
         rtc: Rtc,
-        timer_count: u16,
+        timer_count: Wrapping<u32>,
         synchronized: bool,
     }
     #[init(spawn=[])]
@@ -138,7 +185,7 @@ const APP: () = {
             val: 0,
             decoder: MyDecoder::new(),
             rtc,
-            timer_count: 0,
+            timer_count: Wrapping(0),
             synchronized: false,
         }
     }
@@ -168,14 +215,15 @@ const APP: () = {
 
         let display = cx.resources.segment_display;
         //show_new_time(decoder.last_bits(), display);
-        let time_display_idx = ((*cx.resources.timer_count / 300) % 4) as u8;
+        let Wrapping(timer) = *cx.resources.timer_count;
+        let time_display_idx = ((timer / 300) % 4) as u8;
         show_rtc_time(
             cx.resources.rtc,
             display,
             time_display_idx,
             *cx.resources.synchronized,
         );
-        *cx.resources.timer_count += 1;
+        *cx.resources.timer_count += Wrapping(1);
         //rprintln!("TIMER2");
     }
 
