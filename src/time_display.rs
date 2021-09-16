@@ -1,11 +1,9 @@
 use crate::Rtc;
 use crate::SegmentDisplay;
 use adafruit_7segment::{AsciiChar, Index, SevenSegment};
-use dcf77::DCF77Time;
 use rtcc::{Hours, Rtcc};
-use rtt_target::rprintln;
 
-fn display_time(display: &mut SegmentDisplay, hours: u8, minutes: u8, seconds: u8) {
+fn display_time(display: &mut SegmentDisplay, hours: u8, minutes: u8, seconds: u8, dots: u8) {
     let d1 = (hours / 10) as u8;
     let d2 = (hours % 10) as u8;
     let d3 = (minutes / 10) as u8;
@@ -15,10 +13,10 @@ fn display_time(display: &mut SegmentDisplay, hours: u8, minutes: u8, seconds: u
     display.update_buffer_with_digit(Index::Three, d3);
     display.update_buffer_with_digit(Index::Four, d4);
     display.update_buffer_with_colon(seconds % 2 == 1);
-    display.update_buffer_with_dot(Index::One, false);
-    display.update_buffer_with_dot(Index::Two, false);
-    display.update_buffer_with_dot(Index::Three, false);
-    display.update_buffer_with_dot(Index::Four, false);
+    display.update_buffer_with_dot(Index::One, dots & 1 == 1);
+    display.update_buffer_with_dot(Index::Two, dots & 2 == 1);
+    display.update_buffer_with_dot(Index::Three, dots & 4 == 1);
+    display.update_buffer_with_dot(Index::Four, dots & 8 == 1);
     display
         .write_display_buffer()
         .expect("Could not write 7-segment display");
@@ -59,7 +57,7 @@ fn display_year(display: &mut SegmentDisplay, year: u16) {
         .expect("Could not write 7-segment display");
 }
 
-pub(crate) fn display_error(display: &mut SegmentDisplay) {
+pub(crate) fn display_error(display: &mut SegmentDisplay, dots: u8) {
     display
         .update_buffer_with_char(Index::One, AsciiChar::Minus)
         .expect("display minus");
@@ -72,43 +70,11 @@ pub(crate) fn display_error(display: &mut SegmentDisplay) {
     display
         .update_buffer_with_char(Index::Four, AsciiChar::Minus)
         .expect("display minus");
+    display.update_buffer_with_dot(Index::One, dots & 1 == 1);
+    display.update_buffer_with_dot(Index::Two, dots & 2 == 1);
+    display.update_buffer_with_dot(Index::Three, dots & 4 == 1);
+    display.update_buffer_with_dot(Index::Four, dots & 8 == 1);
     display.update_buffer_with_colon(false);
-}
-
-pub(crate) fn show_new_time(data: Option<u64>, display: &mut SegmentDisplay) {
-    match data {
-        None => {
-            display_error(display);
-        }
-        Some(data) => {
-            let time_decoder = DCF77Time::new(data);
-            if time_decoder.validate_start().is_ok() {
-                rprintln!("No start");
-            } else {
-                match (time_decoder.hours(), time_decoder.minutes()) {
-                    (Err(_), Err(_)) => {
-                        rprintln!("hours and minutes error");
-                        display_error(display);
-                    }
-                    (Err(_), _) => {
-                        rprintln!("hours error");
-                        display_error(display);
-                    }
-                    (_, Err(_)) => {
-                        rprintln!("minutes error");
-                        display_error(display);
-                    }
-                    (Ok(hours), Ok(minutes)) => {
-                        rprintln!("Time: {}:{}", hours, minutes);
-                        display_time(display, hours, minutes, 0);
-                    }
-                }
-            }
-        }
-    }
-    display
-        .write_display_buffer()
-        .expect("Could not write 7-segment display");
 }
 
 pub(crate) fn show_rtc_time(
@@ -116,10 +82,11 @@ pub(crate) fn show_rtc_time(
     display: &mut SegmentDisplay,
     idx: u8,
     synchronized: bool,
+    dots: u8,
 ) {
     let s = rtc.get_seconds().expect("to read seconds");
     if synchronized == false {
-        display_error(display);
+        display_error(display, dots);
     } else {
         match idx {
             0 | 1 => {
@@ -130,7 +97,7 @@ pub(crate) fn show_rtc_time(
                     Hours::PM(hours) => hours,
                     Hours::H24(hours) => hours,
                 };
-                display_time(display, hours, m, s);
+                display_time(display, hours, m, s, dots);
             }
             2 => {
                 let d = rtc.get_day().expect("to read days");

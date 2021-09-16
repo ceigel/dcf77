@@ -3,10 +3,8 @@
 extern crate heapless;
 mod cycles_computer;
 mod datetime_converter;
-mod frequency;
 mod time_display;
 
-use crate::frequency::Timing;
 use crate::stm32f4xx_hal::i2c::I2c;
 use datetime_converter::DCF77DateTimeConverter;
 use panic_rtt_target as _;
@@ -92,8 +90,8 @@ impl MyDecoder {
         let level = self.smoother.add_signal(level);
         if level != self.current_level {
             if self.current_pause > 0 {
-                if self.current_level == true && self.current_pause > 130 {
-                    rprintln!("Minute mark!");
+                if self.current_level == true && self.current_pause > 150 {
+                    rprintln!("Minute mark {}", self.current_pause);
                     if self.start_detected {
                         self.last_bits.replace(self.current_bits);
                         rprintln!("Data: {:060b}", self.current_bits);
@@ -110,7 +108,10 @@ impl MyDecoder {
                     }
                     if self.bit_pos == 00 {
                         rprintln!("Bits overrun");
-                    //    self.start_detected = false
+                        self.bit_pos = 59;
+                        self.last_bits.replace(self.current_bits);
+                        rprintln!("Data: {:060b}", self.current_bits);
+                        self.start_detected = false
                     } else {
                         self.bit_pos -= 1;
                     }
@@ -134,7 +135,6 @@ const APP: () = {
         segment_display: SegmentDisplay,
         dcf_pin: gpioa::PA<Input<Floating>>,
         timer: Timer<pac::TIM2>,
-        timing: Timing,
         cycles_computer: CyclesComputer,
         val: u16,
         decoder: MyDecoder,
@@ -169,7 +169,7 @@ const APP: () = {
         ht16k33
             .set_dimming(Dimming::BRIGHTNESS_MAX)
             .expect("Could not set dimming!");
-        display_error(&mut ht16k33);
+        display_error(&mut ht16k33, 0);
         ht16k33
             .write_display_buffer()
             .expect("Could not write 7-segment display");
@@ -181,14 +181,12 @@ const APP: () = {
 
         let mut timer = Timer::tim2(device.TIM2, 100.hz(), clocks);
         timer.listen(Event::TimeOut);
-        let timing = Timing::new();
         let rtc = Rtc::new(device.RTC, 255, 127, false, &mut pwr);
         rprintln!("Init successful");
         init::LateResources {
             segment_display: ht16k33,
             dcf_pin: pin,
             timer,
-            timing,
             cycles_computer: CyclesComputer::new(clocks.sysclk()),
             val: 0,
             decoder: MyDecoder::new(),
@@ -205,23 +203,25 @@ const APP: () = {
         loop {}
     }
 
-    #[task(binds = TIM2, priority=2, resources=[timer, timing, decoder, dcf_pin, segment_display, rtc, timer_count, synchronized])]
+    #[task(binds = TIM2, priority=2, resources=[timer, decoder, dcf_pin, segment_display, rtc, timer_count, synchronized])]
     fn tim2(cx: tim2::Context) {
         cx.resources.timer.clear_interrupt(Event::TimeOut);
-        //        cx.resources.timing.event(ClockEvent::TimerExpired);
         let pin_high = cx.resources.dcf_pin.is_high().unwrap();
         let decoder = cx.resources.decoder;
         decoder.read_bit(pin_high);
 
+        let mut v = 0;
         if let Some(datetime_bits) = decoder.last_bits() {
             decoder.reset_last_bits();
             let converter = DCF77DateTimeConverter::new(datetime_bits);
             match converter.dcf77_decoder() {
                 Err(err) => {
-                    rprintln!("Decoding error: {:?}", err)
+                    rprintln!("Decoding error: {:?}", err);
+                    v = 1;
                 }
                 Ok(dt) => {
                     rprintln!("Good date: {:?}", dt);
+                    v = 8;
                     sync_rtc(cx.resources.rtc, &dt);
                     *cx.resources.synchronized = true;
                 }
@@ -235,6 +235,7 @@ const APP: () = {
             display,
             time_display_idx,
             *cx.resources.synchronized,
+            v,
         );
         *cx.resources.timer_count += Wrapping(1);
     }
