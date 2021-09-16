@@ -36,7 +36,7 @@ impl DCF77DateTimeConverter {
         }
         let year = ((self.encoded_data >> 2) & 0b11111111) as u32;
         let month = ((self.encoded_data >> 10) & 0b11111) as u32;
-        let weekday = ((self.encoded_data >> 15) & 0b111) as u32;
+        let _weekday = ((self.encoded_data >> 15) & 0b111) as u32;
         let day = ((self.encoded_data >> 18) & 0b111111) as u32;
         let datetime_frame = ((self.encoded_data >> 2) & 0b1111111111111111111111) as u32;
         let hours = ((self.encoded_data >> 25) & 0b111111) as u32;

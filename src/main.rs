@@ -6,7 +6,6 @@ mod datetime_converter;
 mod frequency;
 mod time_display;
 
-use crate::frequency::ClockEvent;
 use crate::frequency::Timing;
 use crate::stm32f4xx_hal::i2c::I2c;
 use datetime_converter::DCF77DateTimeConverter;
@@ -14,19 +13,18 @@ use panic_rtt_target as _;
 
 use chrono::naive::NaiveDateTime;
 use core::num::Wrapping;
-use core::time;
 use cortex_m::peripheral::DWT;
 use cycles_computer::CyclesComputer;
 use feather_f405::hal as stm32f4xx_hal;
 use feather_f405::{hal::prelude::*, pac, setup_clocks};
 use ht16k33::{Dimming, Display, HT16K33};
-use rtcc::{NaiveDate, NaiveTime, Rtcc};
+use rtcc::Rtcc;
 use rtic::app;
 use rtt_target::{rprintln, rtt_init_print};
 use stm32f4xx_hal::gpio::{gpioa, gpiob, AlternateOD, Floating, Input, AF4};
 use stm32f4xx_hal::rtc::Rtc;
 use stm32f4xx_hal::timer::{Event, Timer};
-use time_display::{display_error, show_new_time, show_rtc_time};
+use time_display::{display_error, show_rtc_time};
 
 type SegmentDisplay =
     HT16K33<I2c<pac::I2C1, (gpiob::PB6<AlternateOD<AF4>>, gpiob::PB7<AlternateOD<AF4>>)>>;
@@ -54,7 +52,7 @@ impl<const X: usize> SignalSmoother<X> {
 }
 
 fn sync_rtc(rtc: &mut Rtc, dt: &NaiveDateTime) {
-    rtc.set_datetime(dt);
+    rtc.set_datetime(dt).expect("To be able to set datetime");
 }
 
 pub struct MyDecoder {
@@ -84,6 +82,9 @@ impl MyDecoder {
         }
     }
 
+    pub fn reset_last_bits(&mut self) {
+        self.last_bits.take();
+    }
     pub fn last_bits(&self) -> Option<u64> {
         self.last_bits
     }
@@ -92,13 +93,14 @@ impl MyDecoder {
         if level != self.current_level {
             if self.current_pause > 0 {
                 if self.current_level == true && self.current_pause > 130 {
+                    rprintln!("Minute mark!");
                     if self.start_detected {
                         self.last_bits.replace(self.current_bits);
                         rprintln!("Data: {:060b}", self.current_bits);
                     } else {
                         self.start_detected = true;
                     }
-                    self.bit_pos = 60;
+                    self.bit_pos = 59;
                     self.current_bits = 0;
                 } else if self.start_detected && self.current_level == false {
                     if self.current_pause >= 15 {
@@ -106,10 +108,11 @@ impl MyDecoder {
                     } else {
                         self.current_bits &= !(1 << self.bit_pos)
                     }
-                    self.bit_pos -= 1;
                     if self.bit_pos == 00 {
                         rprintln!("Bits overrun");
-                        self.start_detected = false
+                    //    self.start_detected = false
+                    } else {
+                        self.bit_pos -= 1;
                     }
                 }
             }
@@ -179,7 +182,7 @@ const APP: () = {
         let mut timer = Timer::tim2(device.TIM2, 100.hz(), clocks);
         timer.listen(Event::TimeOut);
         let timing = Timing::new();
-        let mut rtc = Rtc::new(device.RTC, 255, 127, false, &mut pwr);
+        let rtc = Rtc::new(device.RTC, 255, 127, false, &mut pwr);
         rprintln!("Init successful");
         init::LateResources {
             segment_display: ht16k33,
@@ -202,14 +205,6 @@ const APP: () = {
         loop {}
     }
 
-    /*
-    #[task(binds = EXTI9_5, priority=2, resources=[dcf_pin, timing, cycles_computer])]
-    fn exti9_5(cx: exti9_5::Context) {
-        cx.resources.dcf_pin.clear_interrupt_pending_bit();
-        cx.resources.timing.event(ClockEvent::SignalDetected(42));
-    }
-    */
-
     #[task(binds = TIM2, priority=2, resources=[timer, timing, decoder, dcf_pin, segment_display, rtc, timer_count, synchronized])]
     fn tim2(cx: tim2::Context) {
         cx.resources.timer.clear_interrupt(Event::TimeOut);
@@ -219,6 +214,7 @@ const APP: () = {
         decoder.read_bit(pin_high);
 
         if let Some(datetime_bits) = decoder.last_bits() {
+            decoder.reset_last_bits();
             let converter = DCF77DateTimeConverter::new(datetime_bits);
             match converter.dcf77_decoder() {
                 Err(err) => {
