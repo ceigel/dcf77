@@ -80,11 +80,11 @@ pub(crate) fn display_error(display: &mut SegmentDisplay, dots: u8) {
 pub(crate) fn show_rtc_time(
     rtc: &mut Rtc,
     display: &mut SegmentDisplay,
-    idx: u8,
     synchronized: bool,
     dots: u8,
 ) {
     let s = rtc.get_seconds().expect("to read seconds");
+    let idx = s % 4;
     if synchronized == false {
         display_error(display, dots);
     } else {

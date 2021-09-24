@@ -12,7 +12,6 @@ use dcf77_decoder::DCF77Decoder;
 use panic_rtt_target as _;
 
 use chrono::naive::NaiveDateTime;
-use core::num::Wrapping;
 use cortex_m::peripheral::DWT;
 use cycles_computer::CyclesComputer;
 use feather_f405::hal as stm32f4xx_hal;
@@ -44,7 +43,6 @@ const APP: () = {
         val: u16,
         decoder: DCF77Decoder,
         rtc: Rtc,
-        timer_count: Wrapping<u32>,
         synchronized: bool,
     }
     #[init(spawn=[])]
@@ -96,7 +94,6 @@ const APP: () = {
             val: 0,
             decoder: DCF77Decoder::new(),
             rtc,
-            timer_count: Wrapping(0),
             synchronized: false,
         }
     }
@@ -108,7 +105,7 @@ const APP: () = {
         loop {}
     }
 
-    #[task(binds = TIM2, priority=2, resources=[timer, decoder, dcf_pin, segment_display, rtc, timer_count, synchronized])]
+    #[task(binds = TIM2, priority=2, resources=[timer, decoder, dcf_pin, segment_display, rtc, synchronized])]
     fn tim2(cx: tim2::Context) {
         cx.resources.timer.clear_interrupt(Event::TimeOut);
         let pin_high = cx.resources.dcf_pin.is_high().unwrap();
@@ -133,16 +130,7 @@ const APP: () = {
             }
         }
         let display = cx.resources.segment_display;
-        let Wrapping(timer) = *cx.resources.timer_count;
-        let time_display_idx = ((timer / 300) % 4) as u8;
-        show_rtc_time(
-            cx.resources.rtc,
-            display,
-            time_display_idx,
-            *cx.resources.synchronized,
-            v,
-        );
-        *cx.resources.timer_count += Wrapping(1);
+        show_rtc_time(cx.resources.rtc, display, *cx.resources.synchronized, v);
     }
 
     extern "C" {

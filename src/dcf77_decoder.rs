@@ -77,10 +77,10 @@ impl DCF77Decoder {
                         self.current_bits &= !(1 << self.bit_pos)
                     }
                     if self.bit_pos == 59 {
-                        rprintln!("Bits overrun");
                         self.bit_pos = 0;
                         self.last_bits.replace(self.current_bits);
                         rprintln!("Data: {:060b}", self.current_bits);
+                        self.current_bits = 0;
                         self.start_detected = false
                     } else {
                         self.bit_pos += 1;
