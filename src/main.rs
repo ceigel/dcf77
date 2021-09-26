@@ -20,7 +20,7 @@ use ht16k33::{Dimming, Display, HT16K33};
 use rtcc::Rtcc;
 use rtic::app;
 use rtt_target::{rprintln, rtt_init_print};
-use stm32f4xx_hal::gpio::{gpioa, gpiob, AlternateOD, Floating, Input, AF4};
+use stm32f4xx_hal::gpio::{gpioa, gpiob, AlternateOD, PullDown, PullUp, Floating, Input, AF4};
 use stm32f4xx_hal::rtc::Rtc;
 use stm32f4xx_hal::timer::{Event, Timer};
 use time_display::{display_error, show_rtc_time};
@@ -32,12 +32,13 @@ fn sync_rtc(rtc: &mut Rtc, dt: &NaiveDateTime) {
     rtc.set_datetime(dt).expect("To be able to set datetime");
 }
 
-const DISP_I2C_ADDR: u8 = 0x77;
+const DISP_I2C_ADDR: u8 = 0x70;
 #[app(device = feather_f405::hal::stm32, monotonic = rtic::cyccnt::CYCCNT, peripherals = true)]
 const APP: () = {
     struct Resources {
         segment_display: SegmentDisplay,
-        dcf_pin: gpioa::PA<Input<Floating>>,
+        //dcf_pin: gpioa::PA<Input<Floating>>,
+        dcf_pin: gpioa::PA<Input<PullUp>>,
         timer: Timer<pac::TIM2>,
         cycles_computer: CyclesComputer,
         val: u16,
@@ -77,7 +78,8 @@ const APP: () = {
             .write_display_buffer()
             .expect("Could not write 7-segment display");
         let gpioa = device.GPIOA.split();
-        let pin = gpioa.pa6.into_floating_input().downgrade();
+        let pin = gpioa.pa6.into_pull_up_input().downgrade();
+        // let pin = gpioa.pa6.into_floating_input().downgrade();
         //pa6.make_interrupt_source(&mut syscfg);
         //pa6.trigger_on_edge(&mut exti, Edge::RISING_FALLING);
         //pa6.enable_interrupt(&mut exti);
