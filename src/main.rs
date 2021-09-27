@@ -20,25 +20,29 @@ use ht16k33::{Dimming, Display, HT16K33};
 use rtcc::Rtcc;
 use rtic::app;
 use rtt_target::{rprintln, rtt_init_print};
-use stm32f4xx_hal::gpio::{gpioa, gpiob, AlternateOD, PullDown, PullUp, Floating, Input, AF4};
+use stm32f4xx_hal::gpio::{gpioa, gpiob, gpioc,  AlternateOD, 
+                          PullUp, PushPull, Input, Output, AF4};
 use stm32f4xx_hal::rtc::Rtc;
 use stm32f4xx_hal::timer::{Event, Timer};
 use time_display::{display_error, show_rtc_time};
 
 type SegmentDisplay =
-    HT16K33<I2c<pac::I2C1, (gpiob::PB6<AlternateOD<AF4>>, gpiob::PB7<AlternateOD<AF4>>)>>;
+    HT16K33<I2c<pac::I2C1, (gpiob::PB6<AlternateOD<AF4>>, 
+                            gpiob::PB7<AlternateOD<AF4>>)>>;
 
 fn sync_rtc(rtc: &mut Rtc, dt: &NaiveDateTime) {
     rtc.set_datetime(dt).expect("To be able to set datetime");
 }
 
 const DISP_I2C_ADDR: u8 = 0x70;
-#[app(device = feather_f405::hal::stm32, monotonic = rtic::cyccnt::CYCCNT, peripherals = true)]
+#[app(device = feather_f405::hal::stm32, monotonic = rtic::cyccnt::CYCCNT, 
+      peripherals = true)]
 const APP: () = {
     struct Resources {
         segment_display: SegmentDisplay,
         //dcf_pin: gpioa::PA<Input<Floating>>,
         dcf_pin: gpioa::PA<Input<PullUp>>,
+        debug_pin: gpioc::PC<Output<PushPull>>,
         timer: Timer<pac::TIM2>,
         cycles_computer: CyclesComputer,
         val: u16,
@@ -79,6 +83,10 @@ const APP: () = {
             .expect("Could not write 7-segment display");
         let gpioa = device.GPIOA.split();
         let pin = gpioa.pa6.into_pull_up_input().downgrade();
+        
+        // Use this pin for debugging decoded signal state with oscilloscope
+        let gpioc = device.GPIOC.split();
+        let output_pin = gpioc.pc6.into_push_pull_output().downgrade();
         // let pin = gpioa.pa6.into_floating_input().downgrade();
         //pa6.make_interrupt_source(&mut syscfg);
         //pa6.trigger_on_edge(&mut exti, Edge::RISING_FALLING);
@@ -91,6 +99,7 @@ const APP: () = {
         init::LateResources {
             segment_display: ht16k33,
             dcf_pin: pin,
+            debug_pin: output_pin,
             timer,
             cycles_computer: CyclesComputer::new(clocks.sysclk()),
             val: 0,
@@ -107,12 +116,19 @@ const APP: () = {
         loop {}
     }
 
-    #[task(binds = TIM2, priority=2, resources=[timer, decoder, dcf_pin, segment_display, rtc, synchronized])]
+    #[task(binds = TIM2, priority=2, resources=[timer, decoder, dcf_pin, 
+           debug_pin, segment_display, rtc, synchronized])]
     fn tim2(cx: tim2::Context) {
         cx.resources.timer.clear_interrupt(Event::TimeOut);
         let pin_high = cx.resources.dcf_pin.is_high().unwrap();
         let decoder = cx.resources.decoder;
+        let debug_pin = cx.resources.debug_pin;
         decoder.read_bit(pin_high);
+
+        match decoder.current_level() {
+            true => debug_pin.set_high(),
+            false => debug_pin.set_low(),
+        };
 
         let mut v = 0;
         if let Some(datetime_bits) = decoder.last_bits() {
