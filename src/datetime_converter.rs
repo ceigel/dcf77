@@ -1,5 +1,6 @@
 use chrono::naive::{NaiveDate, NaiveDateTime};
 use core::fmt::Debug;
+use rtt_target::rprintln;
 #[derive(Debug)]
 pub enum DateTimeErr {
     MinutesWrong,
@@ -59,16 +60,18 @@ impl DCF77DateTimeConverter {
         let year = DCF77DateTimeConverter::naive_year(self, year) as i32;
         let month = DCF77DateTimeConverter::naive_month(self, month);
         let day = DCF77DateTimeConverter::naive_day_or_hours(self, day);
+        rprintln!("Naive date: {}-{}-{}", day, month, year);
 
         if !check_datetime_parity || month >= 12 || day > 31 || year >= 2099 {
             return Err(DateTimeErr::DateWrong);
         }
 
         let hours = DCF77DateTimeConverter::naive_day_or_hours(self, hours);
+        let minutes = DCF77DateTimeConverter::naive_minutes(self, minutes);
+        rprintln!("Naive time: {}:{}", hours, minutes);
         if !check_hours_parity || hours >= 24 {
             return Err(DateTimeErr::HoursWrong);
         }
-        let minutes = DCF77DateTimeConverter::naive_minutes(self, minutes);
         if !check_minutes_parity || minutes >= 60 {
             return Err(DateTimeErr::MinutesWrong);
         }
