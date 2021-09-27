@@ -49,7 +49,7 @@ impl DCF77Decoder {
             if let Some(last) = self.last_low_to_high.take() {
                 let diff = now - last;
                 let diff = self.cycles_computer.from_cycles(diff);
-                let minute_mark = if diff.as_millis() > 1700 {
+                let minute_mark = if diff.as_millis() > 1500 {
                     " MINUTE MARK"
                 } else {
                     ""
