@@ -6,6 +6,8 @@ mod datetime_converter;
 mod dcf77_decoder;
 mod time_display;
 
+use rtic::cyccnt::{Instant, U32Ext};
+
 use crate::stm32f4xx_hal::i2c::I2c;
 use datetime_converter::DCF77DateTimeConverter;
 use dcf77_decoder::DCF77Decoder;
@@ -20,9 +22,8 @@ use ht16k33::{Dimming, Display, HT16K33};
 use rtcc::Rtcc;
 use rtic::app;
 use rtt_target::{rprintln, rtt_init_print};
-use stm32f4xx_hal::gpio::{gpioa, gpiob, AlternateOD, Floating, Input, AF4};
+use stm32f4xx_hal::gpio::{gpioa, gpiob, AlternateOD, Edge, Input, PullUp, AF4};
 use stm32f4xx_hal::rtc::Rtc;
-use stm32f4xx_hal::timer::{Event, Timer};
 use time_display::{display_error, show_rtc_time};
 
 type SegmentDisplay =
@@ -37,8 +38,7 @@ const DISP_I2C_ADDR: u8 = 0x77;
 const APP: () = {
     struct Resources {
         segment_display: SegmentDisplay,
-        dcf_pin: gpioa::PA<Input<Floating>>,
-        timer: Timer<pac::TIM2>,
+        dcf_pin: gpioa::PA<Input<PullUp>>,
         cycles_computer: CyclesComputer,
         val: u16,
         decoder: DCF77Decoder,
@@ -56,8 +56,8 @@ const APP: () = {
         //core.SCB.set_sleepdeep();
 
         let clocks = setup_clocks(device.RCC);
-        let _syscfg = device.SYSCFG.constrain();
-        let _exti = device.EXTI;
+        let mut syscfg = device.SYSCFG.constrain();
+        let mut exti = device.EXTI;
         let mut pwr = device.PWR;
 
         let gpiob = device.GPIOB.split();
@@ -77,22 +77,20 @@ const APP: () = {
             .write_display_buffer()
             .expect("Could not write 7-segment display");
         let gpioa = device.GPIOA.split();
-        let pin = gpioa.pa6.into_floating_input().downgrade();
-        //pa6.make_interrupt_source(&mut syscfg);
-        //pa6.trigger_on_edge(&mut exti, Edge::RISING_FALLING);
-        //pa6.enable_interrupt(&mut exti);
+        let mut pin = gpioa.pa6.into_pull_up_input().downgrade();
+        pin.make_interrupt_source(&mut syscfg);
+        pin.trigger_on_edge(&mut exti, Edge::RISING_FALLING);
+        pin.enable_interrupt(&mut exti);
 
-        let mut timer = Timer::tim2(device.TIM2, 100.hz(), clocks);
-        timer.listen(Event::TimeOut);
         let rtc = Rtc::new(device.RTC, 255, 127, false, &mut pwr);
         rprintln!("Init successful");
+        let cc = CyclesComputer::new(clocks.sysclk());
         init::LateResources {
             segment_display: ht16k33,
             dcf_pin: pin,
-            timer,
-            cycles_computer: CyclesComputer::new(clocks.sysclk()),
+            cycles_computer: cc.clone(),
             val: 0,
-            decoder: DCF77Decoder::new(),
+            decoder: DCF77Decoder::new(cc),
             rtc,
             synchronized: false,
         }
@@ -105,32 +103,22 @@ const APP: () = {
         loop {}
     }
 
-    #[task(binds = TIM2, priority=2, resources=[timer, decoder, dcf_pin, segment_display, rtc, synchronized])]
-    fn tim2(cx: tim2::Context) {
-        cx.resources.timer.clear_interrupt(Event::TimeOut);
-        let pin_high = cx.resources.dcf_pin.is_high().unwrap();
-        let decoder = cx.resources.decoder;
-        decoder.read_bit(pin_high);
-
-        let mut v = 0;
-        if let Some(datetime_bits) = decoder.last_bits() {
-            decoder.reset_last_bits();
-            let converter = DCF77DateTimeConverter::new(datetime_bits);
-            match converter.dcf77_decoder() {
-                Err(err) => {
-                    rprintln!("Decoding error: {:?}", err);
-                    v = 1;
-                }
-                Ok(dt) => {
-                    rprintln!("Good date: {:?}", dt);
-                    v = 8;
-                    sync_rtc(cx.resources.rtc, &dt);
-                    *cx.resources.synchronized = true;
-                }
-            }
+    #[task(binds = EXTI9_5, priority=2, resources=[dcf_pin, cycles_computer, decoder])]
+    fn exti9_5(cx: exti9_5::Context) {
+        let dcf_pin = cx.resources.dcf_pin;
+        let dcf_interrupted = dcf_pin.check_interrupt();
+        dcf_pin.clear_interrupt_pending_bit();
+        if !dcf_interrupted {
+            return;
         }
-        let display = cx.resources.segment_display;
-        show_rtc_time(cx.resources.rtc, display, *cx.resources.synchronized, v);
+        let now = Instant::now();
+        let res = cx
+            .resources
+            .decoder
+            .register_transition(dcf_pin.is_high().unwrap(), now);
+        if let Err(e) = res {
+            rprintln!("Err: {:?}", e);
+        }
     }
 
     extern "C" {

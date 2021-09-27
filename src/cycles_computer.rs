@@ -2,6 +2,7 @@ use crate::stm32f4xx_hal::time::Hertz;
 use core::time;
 use rtic::cyccnt;
 
+#[derive(Clone)]
 pub struct CyclesComputer {
     frequency: Hertz,
 }

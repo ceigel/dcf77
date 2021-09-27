@@ -1,100 +1,64 @@
+use crate::cycles_computer::CyclesComputer;
 use core::num::Wrapping;
+use rtic::cyccnt::{Instant, U32Ext};
 use rtt_target::rprintln;
 
-pub struct SignalSmoother<const X: usize> {
-    buf: [bool; X],
-    last_val: bool,
-}
-
-impl<const X: usize> SignalSmoother<X> {
-    pub fn new() -> Self {
-        Self {
-            buf: [true; X],
-            last_val: true,
-        }
-    }
-    pub fn add_signal(&mut self, sig: bool) -> bool {
-        self.buf.rotate_left(1);
-        self.buf[X - 1] = sig;
-        if self.buf.iter().all(|x| *x != self.last_val) {
-            self.last_val = !self.last_val;
-        }
-        self.last_val
-    }
+#[derive(Debug)]
+pub enum DecoderError {
+    WrongTransition,
 }
 
 pub struct DCF77Decoder {
-    current_count: Wrapping<u64>,
-    current_level: bool,
-    last_transition: Wrapping<u64>,
-    current_pause: u64,
-    smoother: SignalSmoother<7>,
-    start_detected: bool,
-    current_bits: u64,
-    last_bits: Option<u64>,
-    bit_pos: usize,
+    bins: [i8; 1000],
+    last_high_to_low: Option<Instant>,
+    last_low_to_high: Option<Instant>,
+    cycles_computer: CyclesComputer,
 }
 
 impl DCF77Decoder {
-    pub fn new() -> Self {
+    pub fn new(cycles_computer: CyclesComputer) -> Self {
         Self {
-            current_count: Wrapping(0),
-            current_level: false,
-            last_transition: Wrapping(0),
-            current_pause: 0,
-            smoother: SignalSmoother::new(),
-            start_detected: false,
-            current_bits: 0,
-            last_bits: None,
-            bit_pos: 0,
+            bins: [0; 1000],
+            last_high_to_low: None,
+            last_low_to_high: None,
+            cycles_computer,
         }
     }
 
-    pub fn reset_last_bits(&mut self) {
-        self.last_bits.take();
-    }
-    pub fn last_bits(&self) -> Option<u64> {
-        self.last_bits
-    }
-    pub fn read_bit(&mut self, level: bool) {
-        let level = self.smoother.add_signal(level);
-        if level != self.current_level {
-            if self.current_pause > 0 {
-                if self.current_level == true && self.current_pause > 150 {
-                    rprintln!("Minute mark {}", self.current_pause);
-                    if self.start_detected {
-                        self.last_bits.replace(self.current_bits);
-                        rprintln!("Data: {:060b}", self.current_bits);
-                    } else {
-                        self.start_detected = true;
-                    }
-                    self.bit_pos = 0;
-                    self.current_bits = 0;
-                } else if self.start_detected && self.current_level == false {
-                    if self.current_pause >= 15 {
-                        self.current_bits |= 1 << self.bit_pos
-                    } else {
-                        self.current_bits &= !(1 << self.bit_pos)
-                    }
-                    if self.bit_pos == 59 {
-                        self.bit_pos = 0;
-                        self.last_bits.replace(self.current_bits);
-                        rprintln!("Data: {:060b}", self.current_bits);
-                        self.current_bits = 0;
-                        self.start_detected = false
-                    } else {
-                        self.bit_pos += 1;
-                    }
-                }
+    pub fn register_transition(
+        &mut self,
+        low_to_high: bool,
+        now: Instant,
+    ) -> Result<(), DecoderError> {
+        if low_to_high {
+            self.last_low_to_high.replace(now);
+            if let Some(last) = self.last_high_to_low.take() {
+                let diff = now - last;
+                let diff = self.cycles_computer.from_cycles(diff);
+                let bit = match diff.as_millis() {
+                    60..=140 => 0,
+                    160..=240 => 1,
+                    _ => 3,
+                };
+                rprintln!("Edge: low->high: {}ms {}", diff.as_millis(), bit);
+            } else {
+                return Err(DecoderError::WrongTransition);
             }
-            self.current_pause = 0;
-            self.current_level = level;
-            self.last_transition = self.current_count;
         } else {
-            let diff = self.current_count - self.last_transition;
-            let Wrapping(d) = diff;
-            self.current_pause = d;
+            self.last_high_to_low.replace(now);
+            if let Some(last) = self.last_low_to_high.take() {
+                let diff = now - last;
+                let diff = self.cycles_computer.from_cycles(diff);
+                let minute_mark = if diff.as_millis() > 1700 {
+                    " MINUTE MARK"
+                } else {
+                    ""
+                };
+                rprintln!("Edge: high->low: {}ms{}", diff.as_millis(), minute_mark);
+            } else {
+                return Err(DecoderError::WrongTransition);
+            }
         }
-        self.current_count += Wrapping(1);
+        Ok(())
     }
 }
