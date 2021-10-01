@@ -49,7 +49,7 @@ fn start_tim1(tim1: pac::TIM1, clocks: &Clocks) -> pac::TIM1 {
     let ticks = clocks.pclk2().0; // for 1.hz() = 84 * 1E+6
 
     // let arr = u16(ticks / u32(psc + 1)).unwrap();
-    let arr: u32 = 1000; // 1000 bins
+    let arr: u32 = 999; // 1000 bins
 
     let arr = arr << ARR_MULTIPL; // we can't fit more into psc
     let psc = u16((ticks / arr) - 1).unwrap(); // 42000

@@ -1,4 +1,5 @@
 use crate::cycles_computer::CyclesComputer;
+use core::iter::IntoIterator;
 use core::num::Wrapping;
 use rtic::cyccnt::{Instant, U32Ext};
 use rtt_target::rprintln;
@@ -25,7 +26,7 @@ impl Edge {
 }
 
 struct Binning {
-    bins: [i8; 1000],
+    bins: [i8; 250],
     max_index: Option<usize>,
     max_val: i8,
     min_index: Option<usize>,
@@ -35,7 +36,7 @@ struct Binning {
 impl Default for Binning {
     fn default() -> Self {
         Binning {
-            bins: [0; 1000],
+            bins: [0; 250],
             max_index: None,
             max_val: 0,
             min_index: None,
@@ -45,9 +46,9 @@ impl Default for Binning {
 }
 
 impl Binning {
-    const MARGIN: usize = 15;
+    const MARGIN: usize = 5;
     pub fn add_edge(&mut self, bin: u32, edge: Edge) -> Option<Edge> {
-        let bin = bin as usize;
+        let bin = (bin >> 2) as usize;
         if edge == Edge::Up {
             self.bins[bin] += 1;
             if self.bins[bin] > self.max_val {
@@ -77,15 +78,24 @@ impl Binning {
 
     fn rate_edge(&self, bin: usize, edge: Edge) -> Option<Edge> {
         if let (Some(max_index), Some(min_index)) = (self.max_index, self.min_index) {
-            if edge == Edge::Up {
-                if (((max_index as i32) - (bin as i32)).abs() as usize) < Self::MARGIN {
-                    // up-edge close to min (15ms)
-                    return Some(edge);
-                }
-            } else {
-                if (((min_index as i32) - (bin as i32)).abs() as usize) < Self::MARGIN {
-                    // down-edge close to min (15ms)
-                    return Some(edge);
+            if self.max_val > 5 || self.min_val < -5 {
+                let r0 = bin.checked_sub(Self::MARGIN).unwrap_or(0);
+                let r1 = bin
+                    .checked_add(Self::MARGIN)
+                    .unwrap_or(self.bins.len() - 1)
+                    .min(self.bins.len() - 1);
+                if edge == Edge::Up {
+                    let _max_range = (&self.bins[r0..r1]).into_iter().max().unwrap_or(&0);
+                    if (((max_index as i32) - (bin as i32)).abs() as usize) < Self::MARGIN {
+                        // up-edge close to min (15ms)
+                        return Some(edge);
+                    }
+                } else {
+                    let _min_range = (&self.bins[r0..r1]).into_iter().min().unwrap_or(&0);
+                    if (((min_index as i32) - (bin as i32)).abs() as usize) < Self::MARGIN {
+                        // down-edge close to min (15ms)
+                        return Some(edge);
+                    }
                 }
             }
         }
@@ -120,7 +130,6 @@ impl DCF77Decoder {
         if self.bins.add_edge(bin_idx, edge).is_none() {
             return Ok(());
         }
-        rprintln!("tick: {:?} {}", edge, bin_idx);
         if low_to_high {
             self.last_low_to_high.replace(now);
             if let Some(last) = self.last_high_to_low.take() {
