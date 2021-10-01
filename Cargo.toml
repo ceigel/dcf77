@@ -15,10 +15,12 @@ ht16k33 = { version = "0.4.0", default-features = false }
 adafruit-7segment = { version = "0.1.0", default-features = false  }
 chrono = {version = "0.4.19", default-features=false}
 rtcc = "0.2.1"
+cast = "0.3.0"
 
 [dependencies.feather-f405]
 version = "0.2.0"
 git = "https://github.com/jkristell/feather-f405.git"
+rev="4a9f009"
 
 [dev-dependencies]
 usb-device = "0.2"
