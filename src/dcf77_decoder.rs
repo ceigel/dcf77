@@ -1,4 +1,5 @@
 use crate::cycles_computer::CyclesComputer;
+use crate::stm32f4xx_hal::gpio::{gpioc, Output, PushPull};
 use core::iter::IntoIterator;
 use core::num::Wrapping;
 use rtic::cyccnt::{Instant, U32Ext};
@@ -125,12 +126,14 @@ impl DCF77Decoder {
         low_to_high: bool,
         now: Instant,
         bin_idx: u32,
+        debug_pin: &mut gpioc::PC6<Output<PushPull>>,
     ) -> Result<(), DecoderError> {
         let edge = Edge::new(low_to_high);
         if self.bins.add_edge(bin_idx, edge).is_none() {
             return Ok(());
         }
         if low_to_high {
+            debug_pin.set_high();
             self.last_low_to_high.replace(now);
             if let Some(last) = self.last_high_to_low.take() {
                 let diff = now - last;
@@ -145,6 +148,7 @@ impl DCF77Decoder {
                 return Err(DecoderError::WrongTransition);
             }
         } else {
+            debug_pin.set_low();
             self.last_high_to_low.replace(now);
             if let Some(last) = self.last_low_to_high.take() {
                 let diff = now - last;

@@ -23,7 +23,9 @@ use ht16k33::{Dimming, Display, HT16K33};
 use rtcc::Rtcc;
 use rtic::app;
 use rtt_target::{rprintln, rtt_init_print};
-use stm32f4xx_hal::gpio::{gpioa, gpiob, AlternateOD, Edge, Input, PullUp, AF4};
+use stm32f4xx_hal::gpio::{
+    gpioa, gpiob, gpioc, AlternateOD, Edge, Input, Output, PullUp, PushPull, AF4,
+};
 use stm32f4xx_hal::{rcc::*, rtc::Rtc};
 use time_display::{display_error, show_rtc_time};
 
@@ -74,6 +76,7 @@ const APP: () = {
     struct Resources {
         segment_display: SegmentDisplay,
         dcf_pin: gpioa::PA6<Input<PullUp>>,
+        debug_pin: gpioc::PC6<Output<PushPull>>,
         tim1: pac::TIM1,
         cycles_computer: CyclesComputer,
         val: u16,
@@ -119,6 +122,10 @@ const APP: () = {
         pin.trigger_on_edge(&mut exti, Edge::RisingFalling);
         pin.enable_interrupt(&mut exti);
 
+        // Use this pin for debugging decoded signal state with oscilloscope
+        let gpioc = device.GPIOC.split();
+        let debug_pin = gpioc.pc6.into_push_pull_output();
+
         let tim1 = start_tim1(device.TIM1, &clocks);
         let rtc = Rtc::new(device.RTC, 255, 127, false, &mut pwr);
         rprintln!("Init successful");
@@ -126,6 +133,7 @@ const APP: () = {
         init::LateResources {
             segment_display: ht16k33,
             dcf_pin: pin,
+            debug_pin,
             tim1,
             cycles_computer: cc.clone(),
             val: 0,
@@ -142,10 +150,11 @@ const APP: () = {
         loop {}
     }
 
-    #[task(binds = EXTI9_5, priority=2, resources=[dcf_pin, tim1, cycles_computer, decoder])]
+    #[task(binds = EXTI9_5, priority=2, resources=[dcf_pin, debug_pin, tim1, cycles_computer, decoder])]
     fn exti9_5(cx: exti9_5::Context) {
         let tim1 = cx.resources.tim1;
         let dcf_pin = cx.resources.dcf_pin;
+        let debug_pin = cx.resources.debug_pin;
         let dcf_interrupted = dcf_pin.check_interrupt();
         dcf_pin.clear_interrupt_pending_bit();
         if !dcf_interrupted {
@@ -153,10 +162,10 @@ const APP: () = {
         }
         let now = Instant::now();
         let tim1_val: u32 = tim1.cnt.read().bits() >> ARR_MULTIPL;
-        let res = cx
-            .resources
-            .decoder
-            .register_transition(dcf_pin.is_high(), now, tim1_val);
+        let res =
+            cx.resources
+                .decoder
+                .register_transition(dcf_pin.is_high(), now, tim1_val, debug_pin);
         if let Err(e) = res {
             rprintln!("Err: {:?}", e);
         }
