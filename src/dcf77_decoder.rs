@@ -50,12 +50,18 @@ impl DCF77Decoder {
         }
     }
 
+    pub fn current_level(&self) -> bool {
+        self.current_level
+    }
+
     pub fn reset_last_bits(&mut self) {
         self.last_bits.take();
     }
+
     pub fn last_bits(&self) -> Option<u64> {
         self.last_bits
     }
+
     pub fn read_bit(&mut self, level: bool) {
         let level = self.smoother.add_signal(level);
         if level != self.current_level {
