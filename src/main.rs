@@ -20,15 +20,13 @@ use ht16k33::{Dimming, Display, HT16K33};
 use rtcc::Rtcc;
 use rtic::app;
 use rtt_target::{rprintln, rtt_init_print};
-use stm32f4xx_hal::gpio::{gpioa, gpiob, gpioc,  AlternateOD, 
-                          PullUp, PushPull, Input, Output, AF4};
+use stm32f4xx_hal::gpio::{gpioa, gpiob, gpioc, AlternateOD, Input, Output, PullUp, PushPull, AF4};
 use stm32f4xx_hal::rtc::Rtc;
 use stm32f4xx_hal::timer::{Event, Timer};
 use time_display::{display_error, show_rtc_time};
 
 type SegmentDisplay =
-    HT16K33<I2c<pac::I2C1, (gpiob::PB6<AlternateOD<AF4>>, 
-                            gpiob::PB7<AlternateOD<AF4>>)>>;
+    HT16K33<I2c<pac::I2C1, (gpiob::PB6<AlternateOD<AF4>>, gpiob::PB7<AlternateOD<AF4>>)>>;
 
 fn sync_rtc(rtc: &mut Rtc, dt: &NaiveDateTime) {
     rtc.set_datetime(dt).expect("To be able to set datetime");
@@ -83,7 +81,7 @@ const APP: () = {
             .expect("Could not write 7-segment display");
         let gpioa = device.GPIOA.split();
         let pin = gpioa.pa6.into_pull_up_input().downgrade();
-        
+
         // Use this pin for debugging decoded signal state with oscilloscope
         let gpioc = device.GPIOC.split();
         let output_pin = gpioc.pc6.into_push_pull_output().downgrade();
@@ -126,8 +124,8 @@ const APP: () = {
         decoder.read_bit(pin_high);
 
         match decoder.current_level() {
-            true => debug_pin.set_high(),
-            false => debug_pin.set_low(),
+            true => drop(debug_pin.set_high()),
+            false => drop(debug_pin.set_low()),
         };
 
         let mut v = 0;
